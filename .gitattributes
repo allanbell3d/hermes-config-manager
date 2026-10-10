@@ -1,0 +1,2 @@
+# Store every file byte-for-byte: YAML fixtures and patch tests depend on exact line endings.
+* -text

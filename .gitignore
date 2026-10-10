@@ -1,0 +1,15 @@
+# Private working files (real configs, notes, sketches, model lists): kept locally, never committed.
+internal_files/
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Config backups written next to edited files.
+*.bak_*
+
+# Safety net: local secrets, logs and virtual environments.
+.env
+.env.*
+*.log
+.venv/

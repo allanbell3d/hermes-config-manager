@@ -1,0 +1,6 @@
+# broken on purpose (test data)
+model:
+  default: some-model
+ provider: some-provider
+compression:
+  enabled: true

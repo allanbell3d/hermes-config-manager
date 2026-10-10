@@ -1,0 +1,229 @@
+{
+ "about": "discord: keys Hermes reads that the dashboard export of an empty profile does not list. tools/hermes_source_keys.py finds the keys in the Hermes source; this file gives each one its type, closed value set, default and description (checked against the Hermes source; the docs lag behind it). row: the code proves the Discord adapter reads it, so the app shows it as a row under Discord (false: only described when a config has it). Keys the export already lists are taken from the export and need no entry here.",
+ "section": "discord",
+ "keys": {
+  "allow_bots": {
+   "type": "str",
+   "enum": [
+    "none",
+    "mentions",
+    "all"
+   ],
+   "default": "none",
+   "row": true,
+   "description": "Messages from other Discord bots: none ignores them, mentions accepts only bot messages that @mention this bot, all accepts every bot message. Either enabled mode still needs a typed inline mention unless bots_require_inline_mention is false. Env DISCORD_ALLOW_BOTS wins."
+  },
+  "allow_from": {
+   "type": "str",
+   "row": true,
+   "description": "Discord user IDs or usernames allowed to use the bot (comma-separated or a YAML list; * allows everyone). Without this or allowed_roles, everyone is denied unless allow_all_users is true or allowed_channels scopes server access. Usernames turn on the Server Members intent. Env DISCORD_ALLOWED_USERS wins."
+  },
+  "allowed_users": {
+   "type": "str",
+   "row": false,
+   "description": "Older name of allow_from; Hermes still reads it when allow_from is not set."
+  },
+  "allowed_roles": {
+   "type": "str",
+   "row": true,
+   "description": "Discord role IDs (comma-separated or a YAML list); any member with one of these roles is allowed, in addition to allow_from. Turns on the Server Members intent. Env DISCORD_ALLOWED_ROLES wins."
+  },
+  "allow_all_users": {
+   "type": "bool",
+   "default": false,
+   "row": true,
+   "description": "Allow every Discord user who can reach the bot. Only for trusted or private servers. Env DISCORD_ALLOW_ALL_USERS wins."
+  },
+  "allow_admin_from": {
+   "type": "str",
+   "row": true,
+   "description": "User IDs that may run every slash command in DMs. Users not listed may only run user_allowed_commands (plus /help and /whoami). Unset: no slash command gating."
+  },
+  "user_allowed_commands": {
+   "type": "list",
+   "row": true,
+   "description": "Slash commands that allowed users who are not in allow_admin_from may run in DMs (/help and /whoami are always allowed)."
+  },
+  "group_allow_admin_from": {
+   "type": "str",
+   "row": true,
+   "description": "Like allow_admin_from, for server channels."
+  },
+  "group_user_allowed_commands": {
+   "type": "list",
+   "row": true,
+   "description": "Like user_allowed_commands, for server channels."
+  },
+  "require_admin_for_exec_approval": {
+   "type": "bool",
+   "default": false,
+   "row": true,
+   "description": "Only users in allow_admin_from may click command-approval buttons. With nobody in allow_admin_from the buttons work for no one."
+  },
+  "allow_mentions": {
+   "type": "map",
+   "row": false,
+   "description": "What the bot may ping. Safe defaults: no @everyone/@here, no @role."
+  },
+  "allow_mentions.everyone": {
+   "type": "bool",
+   "default": false,
+   "row": true,
+   "description": "Let the bot ping @everyone and @here. Env DISCORD_ALLOW_MENTION_EVERYONE wins."
+  },
+  "allow_mentions.roles": {
+   "type": "bool",
+   "default": false,
+   "row": true,
+   "description": "Let the bot ping @role mentions. Env DISCORD_ALLOW_MENTION_ROLES wins."
+  },
+  "allow_mentions.users": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "Let the bot ping individual users. Env DISCORD_ALLOW_MENTION_USERS wins."
+  },
+  "allow_mentions.replied_user": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "A reply pings the author of the original message. Env DISCORD_ALLOW_MENTION_REPLIED_USER wins."
+  },
+  "ignored_channels": {
+   "type": "str",
+   "row": true,
+   "description": "Channel IDs where the bot never responds, even when mentioned (comma-separated or a YAML list; * ignores every server channel). Checked after allowed_channels, before mentions and free-response channels. Env DISCORD_IGNORED_CHANNELS wins."
+  },
+  "no_thread_channels": {
+   "type": "str",
+   "row": true,
+   "description": "Channel IDs where the bot answers in the channel instead of creating a thread (comma-separated or a YAML list). Only matters when auto_thread is true. Env DISCORD_NO_THREAD_CHANNELS wins."
+  },
+  "reply_to_mode": {
+   "type": "str",
+   "enum": [
+    "off",
+    "first",
+    "all"
+   ],
+   "default": "first",
+   "row": true,
+   "description": "Reply reference on the bot's messages: off never, first on the first chunk only, all on every chunk. Env DISCORD_REPLY_TO_MODE wins."
+  },
+  "slash_commands": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "Register Hermes' slash commands (built-ins and installed skills) with Discord at startup. Turn off on every gateway but one when several share one Discord application."
+  },
+  "group_sessions_per_user": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "In shared channels each user gets their own session. Read by the Discord adapter for its session keys (default true), separately from the top-level group_sessions_per_user that the gateway reads."
+  },
+  "thread_sessions_per_user": {
+   "type": "bool",
+   "default": false,
+   "row": true,
+   "description": "In threads each user gets their own session (default: one session per thread). Read by the Discord adapter for its session keys, separately from the top-level setting."
+  },
+  "channel_skill_bindings": {
+   "type": "list",
+   "row": true,
+   "description": "Skills bound to specific channels (Discord and Slack)."
+  },
+  "liveness_interval_seconds": {
+   "type": "int",
+   "row": false,
+   "description": "Older name of websocket_liveness_interval_seconds; still read."
+  },
+  "liveness_failure_threshold": {
+   "type": "int",
+   "row": false,
+   "description": "Older name of websocket_liveness_failure_threshold; still read."
+  },
+  "unauthorized_dm_behavior": {
+   "type": "str",
+   "enum": [
+    "pair",
+    "ignore",
+    "decline"
+   ],
+   "row": true,
+   "description": "What happens when someone who is not allowed sends a DM: pair offers pairing, ignore stays silent, decline replies with a refusal. Overrides the top-level unauthorized_dm_behavior for Discord."
+  },
+  "notice_delivery": {
+   "type": "str",
+   "enum": [
+    "public",
+    "private"
+   ],
+   "default": "public",
+   "row": true,
+   "description": "Where Hermes posts its notices: public in the channel, private to the user."
+  },
+  "gateway_restart_notification": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "Post a 'gateway online / restarted' message on this platform."
+  },
+  "typing_indicator": {
+   "type": "bool",
+   "default": true,
+   "row": true,
+   "description": "Show 'typing…' while the agent works."
+  },
+  "typing_status_text": {
+   "type": "str",
+   "row": false,
+   "description": "Status text shown while the agent works. Used by Slack and Google Chat only; the Discord adapter does not read it."
+  },
+  "reply_prefix": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "reply_in_thread": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "cron_continuable_surface": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "send_read_receipts": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "mention_patterns": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "exclusive_bot_mentions": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "dm_policy": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "group_policy": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  },
+  "group_allow_from": {
+   "type": "any",
+   "row": false,
+   "description": "Shared chat-platform key: Hermes copies it from every platform block, but the Discord adapter is not known to use it (other platforms do)."
+  }
+ }
+}

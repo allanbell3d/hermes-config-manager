@@ -1,0 +1,6 @@
+# broken on purpose (test data)
+model:
+  default: some-model
+toolsets: [hermes-cli, web
+compression:
+  enabled: true

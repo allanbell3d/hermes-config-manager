@@ -1,0 +1,2 @@
+GENERATED benchmark fixture - 100 synthetic Hermes agent configs built from the public Hermes defaults.
+Generic names, public model names, placeholder credentials. Not real agents. Regenerate: python tools/make_synthetic_fixture.py
