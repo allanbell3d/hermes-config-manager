@@ -357,6 +357,17 @@ def differ(n: int) -> str:
     return f"{n} differs" if n == 1 else f"{n} differ"
 
 
+def agent_names(state, keys: list[str]) -> list[str]:
+    """Agent names for 'who has what'; the host is added when the checked agents come from several hosts."""
+    s = state.session
+    hosts = {r.host for r in (s.record(k) for k in state.scope().usable_keys) if r is not None}
+    out = []
+    for k in keys:
+        r = s.record(k)
+        out.append(k if r is None else r.name + (f" ({r.host})" if len(hosts) > 1 else ""))
+    return out
+
+
 def app() -> QApplication:
     return QApplication.instance()
 

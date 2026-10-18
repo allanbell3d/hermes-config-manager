@@ -11,15 +11,15 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QCursor, QPainter, QPen
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolTip, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QMenu, QSizePolicy, QToolTip,
+                               QVBoxLayout, QWidget)
 
 from ..core.paths import MISSING
 from ..core.settings_tree import Node, key_tags, leaves
 from ..services.work import REMOVE
 from .editors import BlockEditor, edit_hint, make_editor, shown
 from .theme import T, mono, sans
-from .widgets import tip_html, clear_layout, Chevron, Clickable, FlowLayout, IconButton, differ, label, link, plural
+from .widgets import tip_html, agent_names, clear_layout, Chevron, Clickable, IconButton, differ, label, link, plural
 
 ZW = "​"
 
@@ -481,8 +481,12 @@ class SettingItem(QWidget):
             v.addWidget(d)
         dist = self._dist or st.distribution(node, self.table.ctx.keys)
         chips = QWidget()
-        fl = FlowLayout(chips)
-        for value, keys, unset in dist:
+        fl = QGridLayout(chips)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setHorizontalSpacing(12)
+        fl.setVerticalSpacing(4)
+        fl.setColumnStretch(1, 1)
+        for r, (value, keys, unset) in enumerate(dist):
             if node.secret:
                 text = "not set" if value in (MISSING, None, "") else "set"
                 value_tip = text
@@ -499,7 +503,10 @@ class SettingItem(QWidget):
             b.setToolTip(f"{value_tip}\n" + (f"{unset} of them do not set this key in their file\n" if unset else "")
                          + f"Click to check exactly these {plural(len(keys), 'agent')}")
             b.clicked.connect(lambda _=False, ks=list(keys): self.table.page.check_exactly(ks))
-            fl.addWidget(b)
+            fl.addWidget(b, r, 0, Qt.AlignTop)
+            names = label(", ".join(agent_names(st, keys)), tone="muted", wrap=True)
+            names.setToolTip("The checked agents that have this value")
+            fl.addWidget(names, r, 1, Qt.AlignTop)
         if dist:
             v.addWidget(chips)
         if not node.secret:
@@ -515,7 +522,9 @@ class SettingItem(QWidget):
             focus = st.session.viewed
             rec = st.session.record(focus) if focus else None
             if rec is not None and rec.usable:
-                use = link(f"Use the value of {rec.name}",
+                fv = st.scope().draft_value(focus, node.path)
+                fv_text = "not set" if fv is MISSING else "set (hidden)" if node.secret else shown(fv, node.path)
+                use = link(f"Use the value of {rec.name}: {fv_text}",
                            tip="Puts the value of the focused agent (the highlighted one in the Agents pane) in "
                                "this row as your edit")
                 use.clicked.connect(lambda: self._use_focus(focus))

@@ -824,3 +824,108 @@ def test_a_misspelled_discord_key_is_flagged_and_moved_through_review(qapp, herm
         session.drafts.discard()
         win.close()
         session.shutdown()
+
+
+# ------------------------------------------------------------------ who has what
+def _texts(widget):
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    return [w.text() for w in widget.findChildren(QLabel) + widget.findChildren(QPushButton)]
+
+
+def _aux_table(view, task):
+    from hermes_config_manager.gui.chain_table import ChainTable
+
+    view.aux_select(task)
+    return next(c for c in view.findChildren(ChainTable) if c.key == f"aux:{task}")
+
+
+def test_an_empty_head_still_shows_that_the_agents_differ_and_who_has_what(qapp, gui):
+    from PySide6.QtWidgets import QApplication
+
+    from hermes_config_manager.gui.chain_table import DiffDot
+    from hermes_config_manager.gui.widgets import Popover
+
+    state, win = gui
+    s = state.session
+    keys = s.ordered_keys()
+    s.record(keys[0]).data["auxiliary"].pop("mcp", None)               # the agent the page shows: no entry
+    for k in keys[1:]:
+        s.record(k).data["auxiliary"]["mcp"] = {"provider": "auto", "model": ""}
+    s.set_checked(keys, True)
+    s.set_viewed(keys[0])
+    pump(qapp, lambda: False, 0.1)
+    view = page_with(win, "auxiliary")
+    table = _aux_table(view, "mcp")
+    assert table.shown() == []
+    dots = table.findChildren(DiffDot)
+    assert dots, "the agents differ, so the empty head row must say so"
+    dots[0].click()
+    pump(qapp, lambda: False, 0.1)
+    pop = next(w for w in QApplication.topLevelWidgets() if isinstance(w, Popover) and w.isVisible())
+    text = " ".join(_texts(pop))
+    assert "no entry" in text and s.record(keys[0]).name in text and s.record(keys[1]).name in text
+    pop.close()
+
+
+def test_the_effort_list_offers_not_set_to_remove_the_key(qapp, gui):
+    state, win = gui
+    s = state.session
+    s.set_checked(s.ordered_keys()[:1], True)
+    pump(qapp, lambda: False, 0.1)
+    view = page_with(win, "auxiliary")
+    table = _aux_table(view, "vision")
+    cb = table._eff_combo(state.model.efforts, "high", 0)
+    assert cb.itemText(0) == "not set"
+    cb.setCurrentIndex(0)
+    cb.activated.emit(0)
+    assert state.work.chain("aux:vision").rows[0][2] is None
+
+
+def test_the_only_model_of_an_auxiliary_task_can_be_removed(qapp, gui):
+    from hermes_config_manager.gui.widgets import IconButton
+
+    state, win = gui
+    s = state.session
+    keys = s.ordered_keys()
+    s.set_checked(keys[:1], True)
+    pump(qapp, lambda: False, 0.1)
+    view = page_with(win, "auxiliary")
+    table = _aux_table(view, "vision")
+    assert len(table.shown()) == 1
+    actions = table._actions(0, 1)
+    x = next(b for b in actions.findChildren(IconButton) if "Remove" in b.toolTip())
+    assert x.isEnabled()
+    view.chain_remove("aux:vision", 0)
+    assert state.work.chain("aux:vision").removed
+    view.aux_stage(["vision"])
+    d = s.drafts.draft(keys[0])
+    assert d.get(("auxiliary", "vision", "provider")) is MISSING and d.get(("auxiliary", "vision", "model")) is MISSING
+
+
+def test_the_details_of_a_setting_name_who_has_which_value(qapp, gui):
+    state, win = gui
+    s = state.session
+    keys = s.ordered_keys()
+    s.record(keys[0]).data["compression"]["threshold"] = 0.31
+    s.set_checked(keys, True)
+    s.set_viewed(keys[0])
+    pump(qapp, lambda: False, 0.1)
+    page_with(win, "compression")
+    it = item(win, ("compression", "threshold"))
+    it.toggle_details(force=True)
+    text = " ".join(_texts(it.strip))
+    assert s.record(keys[0]).name in text and s.record(keys[1]).name in text
+    assert f"Use the value of {s.record(keys[0]).name}: 0.31" in text
+
+
+def test_an_empty_value_cell_says_not_set(qapp, gui):
+    from hermes_config_manager.gui.editors import LineEditor, make_editor
+
+    state, _win = gui
+    node = next(n for n in state.model.nodes.values()
+                if n.kind in ("int", "str") and n.default is MISSING and not n.secret and not n.is_group)
+    ed = make_editor(node)
+    assert isinstance(ed, LineEditor)
+    ed.show_value(MISSING)
+    assert ed.ed.text() == "" and ed.ed.placeholderText() == "not set"

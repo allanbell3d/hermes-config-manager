@@ -143,7 +143,7 @@ class LineEditor(Editor):
             return
         self.ed.setText("" if dflt or value is None else _text(secrets.redact(value, tuple(self.node.path))))
         if dflt:
-            ph = "empty" if d == "" else "null" if d is None else "" if d is MISSING else _text(d)
+            ph = "empty" if d == "" else "null" if d is None else "not set" if d is MISSING else _text(d)
         else:
             ph = "null" if value is None else ""
         self.ed.setPlaceholderText(ph)

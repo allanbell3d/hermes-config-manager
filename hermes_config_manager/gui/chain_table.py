@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QMen
 from ..services import chains as C
 from ..services.work import chain_staged, rows_of, spec_for, unstage_chain
 from .theme import T, mono, sans
-from .widgets import set_only_link, tip_html, clear_layout, IconButton, Popover, btn, label, link, plural
+from .widgets import (set_only_link, tip_html, agent_names, clear_layout, IconButton, Popover, btn, label, link,
+                      plural)
 
 ZW = "​"
 
@@ -27,6 +28,15 @@ def chain_title(key: str) -> str:
 def model_text(provider: str | None, model: str | None) -> str:
     """What a model cell shows: the id, 'auto · Hermes chooses' for provider auto + model '', else a prompt."""
     return model or ("auto · Hermes chooses" if provider == "auto" else "choose model")
+
+
+def value_word(value: str | None, col: int) -> str:
+    """A provider (0), model (1) or effort (2) value as 'who has what' shows it; None = no entry at all."""
+    if value is None:
+        return "no entry"
+    if value == "":
+        return "'' (Hermes chooses)" if col == 1 else "not set"
+    return value
 
 
 def wrap_model(text: str) -> str:
@@ -247,13 +257,19 @@ class ChainTable(QWidget):
         per_pos = self._per_position(rows)
         any_pend = work is None and any(chain_staged(scope, self.key, k) for k in keys)
         if not rows:
+            # no entry here; the dots still say when other checked agents have one (click: who has what)
+            removed = bool(work) and work.removed
             g.addWidget(self._role("Head"), r_i, 0)
             cb = self._prov_combo(provs, None, 0)
-            g.addWidget(Cell(cb, at=(0, 1)), r_i, 1)
-            mc = ModelCell("choose model", placeholder=True)
+            g.addWidget(Cell(cb, removed, self._dot(per_pos, 0, 0, "Provider"), at=(0, 1)), r_i, 1)
+            mc = ModelCell("entry removed · Hermes uses its default" if removed else "choose model", placeholder=True)
+            mc.setToolTip("Stage it to remove this entry from the files of the checked agents; pick a model to "
+                          "keep one instead." if removed else
+                          "No entry in the file of the agent this table shows. Pick a model to add one.")
             mc.clicked.connect(lambda: self.page.pick_model(self.key, 0, None))
-            g.addWidget(Cell(mc, at=(0, 2)), r_i, 2)
-            g.addWidget(Cell(), r_i, 3)
+            g.addWidget(Cell(mc, removed, self._dot(per_pos, 0, 1, "Model"), at=(0, 2)), r_i, 2)
+            g.addWidget(Cell(None, removed, None if self.no_effort else self._dot(per_pos, 0, 2, "Reasoning effort")),
+                        r_i, 3)
             g.addWidget(Cell(), r_i, 4)
             r_i += 1
         for i, r in enumerate(rows):
@@ -299,13 +315,15 @@ class ChainTable(QWidget):
             if self.no_effort:
                 return "This task takes no reasoning effort."
             if self.key == "primary":
-                return ("How hard the model thinks before answering. 'default' leaves the setting out, so Hermes uses "
+                return ("How hard the model thinks before answering. 'not set' leaves the setting out, so Hermes uses "
                         "its own default (medium). "
                         "The head's effort is saved as agent › reasoning_effort, which is "
                         "what Hermes reads for the main model.")
-            return ("How hard the model thinks before answering. 'default' leaves the setting out, so Hermes uses "
+            return ("How hard the model thinks before answering. 'not set' leaves the setting out, so Hermes uses "
                     "its own default.")
-        return "Move a row up or down, or remove it from the chain."
+        return ("Move a row up or down, or remove it from the chain."
+                + (" Removing the only row removes the task's model entry (Hermes then uses its default)."
+                   if self.spec.task else ""))
 
     def _role(self, text: str) -> QWidget:
         lab = label(text, tone="muted")
@@ -344,12 +362,13 @@ class ChainTable(QWidget):
     def _eff_combo(self, efforts: list[str], cur: str | None, i: int) -> QComboBox:
         cb = QComboBox()
         cb.setProperty("flat", True)
-        cb.setToolTip("Reasoning effort of this row. 'default' leaves it out of the file"
-                      + (" (saved as agent › reasoning_effort)." if self.key == "primary" and i == 0 else "."))
-        items = ["default"] + list(efforts)
+        cb.setToolTip("Reasoning effort of this row. 'not set' removes it from the file, so Hermes uses its own "
+                      "default" + (" (saved as agent › reasoning_effort)." if self.key == "primary" and i == 0 else "."))
+        items = ["not set"] + list(efforts)
         if cur and cur not in items:
             items.append(cur)
         cb.addItems(items)
+        cb.setItemData(0, "Remove reasoning_effort from the file: Hermes uses its own default", Qt.ToolTipRole)
         cb.setCurrentIndex(items.index(cur) if cur else 0)
         cb.activated.connect(lambda _x, cb=cb, i=i: self.page.set_effort(self.key, i, None if cb.currentIndex() == 0
                                                                            else cb.currentText()))
@@ -361,9 +380,12 @@ class ChainTable(QWidget):
         h = QHBoxLayout(w)
         h.setContentsMargins(3, 0, 3, 0)
         h.setSpacing(0)
+        whole = n == 1 and bool(self.spec.task)          # an auxiliary task's only model: remove the entry
+        rm_tip = ("Remove this task's model entry from the file (Hermes then uses its own default). Stage it "
+                  "afterwards." if whole else "Remove from the chain")
         for name, tip, enabled, fn in (("up", "Move up", i > 0, lambda: self.page.chain_move(self.key, i, -1)),
                                        ("down", "Move down", i < n - 1, lambda: self.page.chain_move(self.key, i, 1)),
-                                       ("x", "Remove from the chain", n > 1, lambda: self.page.chain_remove(self.key, i))):
+                                       ("x", rm_tip, n > 1 or whole, lambda: self.page.chain_remove(self.key, i))):
             b = IconButton(name, tip, size=18, icon_size=12)
             b.setFixedSize(18, 24)
             b.setEnabled(enabled)
@@ -399,7 +421,7 @@ class ChainTable(QWidget):
 
                 lines += _model_tip(info).split("\n")[1:]
         lines.append("")
-        shown_v = value or ("default (not in the file)" if c == 2 else
+        shown_v = value or ("not set (Hermes default)" if c == 2 else
                             "'' (provider auto: Hermes chooses)" if c == 1 and value == "" and row[0] == "auto"
                             else "not set")
         if edited:
@@ -410,9 +432,11 @@ class ChainTable(QWidget):
         if cols is not None and len(self._agents) > 1:
             vals = cols[c]
             if len(vals) > 1:
-                parts = [f"{'no entry' if v is None else 'default' if v == '' else v} ×{len(ks)}"
-                         for v, ks in sorted(vals.items(), key=lambda kv: -len(kv[1]))[:4]]
-                lines.append(f"The {len(self._agents)} checked agents differ: " + " · ".join(parts))
+                lines.append(f"The {len(self._agents)} checked agents differ:")
+                for v, ks in sorted(vals.items(), key=lambda kv: -len(kv[1]))[:6]:
+                    names = agent_names(st, ks)
+                    lines.append(f"  {value_word(v, c)}: " + ", ".join(names[:8])
+                                 + (f" +{len(names) - 8} more" if len(names) > 8 else ""))
             else:
                 lines.append(f"All {len(self._agents)} checked agents have the same {what.lower()} here.")
         if c == 0:
@@ -423,7 +447,7 @@ class ChainTable(QWidget):
         elif c == 1:
             lines.append("Click to pick another model. Right-click › Default sets provider: auto and model: ''.")
         else:
-            lines.append("'default' leaves the setting out of the file."
+            lines.append("'not set' leaves the setting out of the file."
                          + (" Saved as agent › reasoning_effort, which Hermes reads for the main model."
                             if self.key == "primary" and i == 0 else ""))
         return tip_html(lines)
@@ -431,11 +455,11 @@ class ChainTable(QWidget):
     def _dot(self, per_pos, i: int, c: int, what: str) -> DiffDot | None:
         if len(self._agents) < 2 or i >= len(per_pos) or len(per_pos[i][c]) < 2:
             return None
-        d = DiffDot(f"{len(per_pos[i][c])} values across the checked agents")
-        d.clicked.connect(lambda: self._show_values(d, per_pos[i][c], i, what))
+        d = DiffDot(f"{len(per_pos[i][c])} values across the checked agents. Click to see who has what.")
+        d.clicked.connect(lambda: self._show_values(d, per_pos[i][c], i, c, what))
         return d
 
-    def _show_values(self, anchor, values: dict, i: int, what: str) -> None:
+    def _show_values(self, anchor, values: dict, i: int, c: int, what: str) -> None:
         pop = Popover(self)
         v = QVBoxLayout(pop)
         v.setContentsMargins(0, 6, 0, 6)
@@ -451,15 +475,17 @@ class ChainTable(QWidget):
         grid.addWidget(label(what, tone="muted", small=True), 0, 0)
         grid.addWidget(label("Agents", tone="muted", small=True), 0, 1)
         for r, (value, keys) in enumerate(sorted(values.items(), key=lambda kv: -len(kv[1])), start=1):
-            text = "no entry at this position" if value is None else "default" if value == "" else value
+            text = value_word(value, c) + (" (not in the file)" if value is None else "")
             lab = label(text, tone="faint" if value in (None, "") else None)
             if value not in (None, ""):
                 lab.setFont(mono())
-            grid.addWidget(lab, r, 0)
-            grid.addWidget(label(str(len(keys))), r, 1)
+            grid.addWidget(lab, r, 0, Qt.AlignTop)
+            names = label(", ".join(agent_names(self.state, keys)), wrap=True)
+            names.setMaximumWidth(360)
+            grid.addWidget(names, r, 1, Qt.AlignTop)
             sel = link("select these", tip="Check exactly these agents")
             sel.clicked.connect(lambda _=False, ks=list(keys): (pop.close(), self.page.check_exactly(ks)))
-            grid.addWidget(sel, r, 2)
+            grid.addWidget(sel, r, 2, Qt.AlignTop)
         v.addLayout(grid)
         pop.show_at(anchor)
 

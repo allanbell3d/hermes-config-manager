@@ -812,6 +812,8 @@ class PageView(QWidget):
         if i < len(w.rows) and len(w.rows) > 1:
             del w.rows[i]
             w.mark(i, "all")
+        elif len(w.rows) == 1 and key.startswith("aux:"):
+            w.remove_all()             # an auxiliary task's only model: its whole entry goes
         self.state.work.edited()
         self.refresh_chain(key)
 

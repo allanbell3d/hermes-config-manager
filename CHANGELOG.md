@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.2 — 2026-10-18
+
+- Where the checked agents differ, every "who has what" now names the agents: the amber dot of a chain
+  cell (tooltip and popup), the dots of the auxiliary task table, and a setting's details, which also show
+  the focused agent's value next to "Use the value of …".
+- A chain whose shown agent has no entry (an auxiliary task the agent never set) still marks where the
+  other checked agents have one, and its popup tells "no entry" apart from `provider: auto`.
+- Reasoning effort: the choice that removes the key from the file is called "not set" (was "default").
+- An auxiliary task's only model can be removed: the task's model entry (provider, model, effort,
+  fallbacks) leaves the file and Hermes uses its default; its other settings stay.
+- An empty value box says "not set" instead of showing nothing.
+
 ## v0.1.1 — 2026-10-10
 
 First public release.

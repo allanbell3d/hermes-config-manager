@@ -23,6 +23,7 @@ from ..core import secrets
 from ..core.assignments import ModelAssignment
 from ..core.edits import EditOp, OpKind
 from ..core.paths import MISSING, PathT, deep_copy
+from ..core.settings_tree import TASK_CHAIN_KEYS
 from ..core.yamlpatch import strict_equal
 from . import chains as C
 
@@ -51,8 +52,16 @@ class ChainWork:
     e: bool = False             # head effort edited
     fb: bool = False            # fallback list edited
     noref: bool = False         # started while no agent was checked
+    removed: bool = False       # the whole entry (head and fallbacks) is removed from the file
+
+    def remove_all(self) -> None:
+        """Remove the whole entry: an auxiliary task then has no model of its own (Hermes' default)."""
+        self.rows = []
+        self.removed = True
+        self.pm = self.e = self.fb = True
 
     def mark(self, i: int, what: str) -> None:
+        self.removed = False
         if i > 0:
             self.fb = True
         elif what == "pm":
@@ -82,6 +91,8 @@ def _as_assignment(row: Row) -> ModelAssignment:
 
 def apply_edits(work: ChainWork, old: list[Row]) -> list[Row]:
     """The agent's chain ``old`` with exactly the edited cells of ``work`` applied."""
+    if work.removed:
+        return []
     new = [list(r) for r in old]
     w = work.rows
     if w and (work.pm or work.e):
@@ -225,6 +236,8 @@ class WorkStore:
             if not w.noref:
                 continue
             w.noref = False
+            if w.removed:
+                continue
             base = rows_of(C.read_chain(scope, spec_for(key), ref))
             if not base:
                 continue
@@ -292,6 +305,12 @@ def chain_ops_for(scope, key: str, w: ChainWork, origin: str) -> dict[str, tuple
         new = apply_edits(w, old)
         if new == old:
             continue
+        if not new:
+            ops = entry_removal_ops(scope, spec, agent, origin)
+            if ops:
+                base, sha = scope.session.base_of(agent)
+                per_agent[agent] = (base, sha, ops)
+            continue
         head_changed = (new[:1] != old[:1])
         head = _as_assignment(new[0]) if head_changed and new else C.KEEP
         fallbacks = [_as_assignment(r) for r in new[1:]] if new[1:] != old[1:] else C.KEEP
@@ -302,6 +321,19 @@ def chain_ops_for(scope, key: str, w: ChainWork, origin: str) -> dict[str, tuple
             base, sha = scope.session.base_of(agent)
             per_agent[agent] = (base, sha, ops)
     return per_agent
+
+
+def entry_removal_ops(scope, spec: C.ChainSpec, agent: str, origin: str) -> list[EditOp]:
+    """Remove an auxiliary task's model entry: its chain keys, or the whole block when nothing else is in it."""
+    block = scope.draft_value(agent, spec.head)
+    if not isinstance(block, dict):
+        return []
+    owned = [k for k in block if k in TASK_CHAIN_KEYS]
+    if not owned:
+        return []
+    if len(owned) == len(block):
+        return [EditOp(OpKind.REMOVE, spec.head, origin=f"{origin}:remove-entry")]
+    return [EditOp(OpKind.REMOVE, spec.head + (k,), origin=f"{origin}:remove-entry") for k in owned]
 
 
 def endpoint_cleanup(scope, spec: C.ChainSpec, agent: str, origin: str) -> list[EditOp]:

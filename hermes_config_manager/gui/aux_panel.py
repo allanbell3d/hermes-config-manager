@@ -13,10 +13,10 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QMenu, QScrollAre
 
 from ..services import chains as C
 from ..services.work import chain_staged, rows_of, spec_for
-from .chain_table import ChainTable, model_text, wrap_model
+from .chain_table import ChainTable, model_text, value_word, wrap_model
 from .settings_table import GroupRow, SettingsTable, sum_html
 from .theme import T, mono, sans
-from .widgets import set_only_link, clear_layout, Clickable, IconButton, btn, label, link, plural
+from .widgets import set_only_link, agent_names, clear_layout, Clickable, IconButton, btn, label, link, plural
 
 
 
@@ -91,8 +91,8 @@ class TaskRow(Clickable):
             p.fillRect(0, 0, 2, self.height(), T.c("accent"))
 
 
-def _dot_label(text_widget: QWidget, n: int, what: str) -> QWidget:
-    """A cell with an amber dot in its corner when the checked agents hold several values."""
+def _dot_label(text_widget: QWidget, n: int, what: str, who: str = "") -> QWidget:
+    """A cell with an amber dot in its corner when the checked agents hold several values (``who``: who has what)."""
     w = QWidget()
     h = QHBoxLayout(w)
     h.setContentsMargins(5, 2, 4, 2)
@@ -102,7 +102,7 @@ def _dot_label(text_widget: QWidget, n: int, what: str) -> QWidget:
         dot = QLabel(w)
         dot.setFixedSize(6, 6)
         dot.setStyleSheet(f"background: {T['amber_edge']}; border-radius: 3px;")
-        dot.setToolTip(f"{n} {what} across the checked agents")
+        dot.setToolTip(f"{n} {what} across the checked agents" + (f":\n{who}" if who else ""))
         w.dot = dot
     return w
 
@@ -259,6 +259,15 @@ class AuxPanel(QWidget):
         n_m = len({h[1] if h else None for h in heads}) if per else 1
         n_e = len({(h[2] or "") if h else None for h in heads}) if per else 1
         n_f = len({max(0, len(r) - 1) for r in per}) if per else 1
+
+        def who(col: int) -> str:
+            groups: dict = {}
+            for k, hd in zip(keys, heads):
+                groups.setdefault(None if hd is None else (hd[col] or ""), []).append(k)
+            if len(groups) < 2:
+                return ""
+            return "\n".join(f"{value_word(v, col)}: {', '.join(agent_names(st, ks))}"
+                             for v, ks in sorted(groups.items(), key=lambda kv: -len(kv[1])))
         if ctx.cust or hidden:
             eye = IconButton("eye_off" if hidden else "eye", ("Show" if hidden else "Hide") + " this task",
                              color="faint" if hidden else "muted")
@@ -300,10 +309,11 @@ class AuxPanel(QWidget):
                 eff = val("—", faint=True)
                 eff.setToolTip("This task takes no reasoning effort")
             else:
-                eff = val(h[2], False) if h and h[2] else val("default" if h else "not set", faint=True)
+                eff = val(h[2], False) if h and h[2] else val("not set", faint=True)
             fb = val(str(max(0, len(rows) - 1)))
-            cells = [first, _dot_label(name, 1, ""), _dot_label(prov, n_p, "values"), _dot_label(mod, n_m, "values"),
-                     _dot_label(eff, n_e, "values"), _dot_label(fb, n_f, "fallback counts")]
+            cells = [first, _dot_label(name, 1, ""), _dot_label(prov, n_p, "values", who(0)),
+                     _dot_label(mod, n_m, "values", who(1)), _dot_label(eff, n_e, "values", who(2)),
+                     _dot_label(fb, n_f, "fallback counts")]
         row = TaskRow(self, t, cells, widths)
         row.on = t == current
         dirty = st.work.chain_dirty(key, scope)

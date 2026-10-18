@@ -181,6 +181,35 @@ def test_editing_the_effort_of_an_auto_head_keeps_its_empty_model(session):
     assert d.get(("auxiliary", "vision", "model")) == "" and d.get(("auxiliary", "vision", "provider")) == "auto"
 
 
+def test_removing_a_tasks_entry_removes_its_model_keys_and_keeps_its_other_settings(session):
+    k = session.ordered_keys()[0]
+    scope = _scope(session, [k])
+    spec = C.aux_spec("vision")
+    assert rows_of(C.read_chain(scope, spec, k))               # the sample has a vision entry
+    work = WorkStore()
+    work.work_chain("aux:vision", scope, k).remove_all()
+    work.edited()
+    assert work.chain_rows("aux:vision", scope, k) == [] and work.chain_dirty("aux:vision", scope)
+    assert work.stage_chain("aux:vision", scope) == 1
+    d = session.drafts.draft(k)
+    for leaf in ("provider", "model", "reasoning_effort", "fallback_chain"):
+        assert d.get(("auxiliary", "vision", leaf)) is MISSING
+    assert d.get(("auxiliary", "vision", "timeout")) == 120     # not part of the model entry: kept
+    assert rows_of(C.read_chain(scope, spec, k)) == []
+
+
+def test_removing_a_tasks_entry_drops_the_block_when_nothing_else_is_in_it(session):
+    keys = session.ordered_keys()[:2]
+    session.record(keys[0]).data["auxiliary"]["mcp"] = {"provider": "auto", "model": ""}
+    session.record(keys[1]).data["auxiliary"].pop("mcp", None)          # no entry at all: nothing to do
+    scope = _scope(session, keys)
+    work = WorkStore()
+    work.work_chain("aux:mcp", scope, keys[0]).remove_all()
+    assert work.stage_chain("aux:mcp", scope) == 1
+    assert session.drafts.draft(keys[0]).get(("auxiliary", "mcp")) is MISSING
+    assert not session.drafts.has_changes(keys[1])
+
+
 def test_a_masked_block_gives_every_agent_its_own_credentials_back(session):
     from hermes_config_manager.core import secrets
 
