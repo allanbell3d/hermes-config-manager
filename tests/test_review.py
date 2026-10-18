@@ -34,7 +34,7 @@ def test_prepare_and_apply_writes_backups_and_clears_drafts(qapp, session):
         rec = session.record(key)
         on_disk = fast_load(Path(rec.path).read_text(encoding="utf-8"))
         assert on_disk["compression"]["threshold"] == 0.71
-        assert list(Path(rec.path).parent.glob("config.yaml.bak_*")), "backup missing"
+        assert list((Path(rec.path).parent / "config-backups").glob("config.yaml.bak_*")), "backup missing"
     assert not session.drafts.has_changes()
     # no SSH endpoint configured: restart is reported, never attempted silently
     assert got["restarted"] and not any(r.ok for r in got["restarted"])

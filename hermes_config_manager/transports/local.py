@@ -94,6 +94,20 @@ class LocalTransport(Transport):
         except OSError as exc:
             raise classify_exception(exc, source) from None
 
+    def make_dir(self, path: str) -> None:
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise classify_exception(exc, path) from None
+
+    def remove(self, path: str) -> None:
+        try:
+            os.remove(path)
+        except OSError as exc:
+            raise classify_exception(exc, path) from None
+
     def replace_bytes(self, path: str, data: bytes) -> None:
         folder = os.path.dirname(path) or "."
         tmp = None

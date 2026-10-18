@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.4 — 2026-10-18
+
+- **Backups go into a `config-backups` folder** next to each written file (the main config, each profile, and
+  their roster files) instead of lying next to the file. The folder gets a `.gitignore` of `*`, so git never sees
+  it.
+- **Backups are rotated**: each file keeps its 10 newest backups and every backup younger than 7 days; older
+  ones are deleted after a write. Backups that earlier versions left next to a file are moved into the folder
+  on its next write and follow the same rule. When old backups cannot be moved or deleted, the write still
+  counts and Review says so.
+- A removed roster file is kept in the `config-backups` folder (never rotated away).
+
 ## v0.1.3 — 2026-10-18
 
 - **Models › Teammates** edits the rosters of the hermes-teammates plugin (`teammates.yaml` next to each

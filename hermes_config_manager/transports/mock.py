@@ -32,6 +32,7 @@ class MockFS:
     files: dict[str, bytes] = field(default_factory=dict)
     mtimes: dict[str, float] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
+    empty_dirs: set[str] = field(default_factory=set)       # folders made with make_dir (others come from files)
 
     def put(self, path: str, data: bytes | str) -> None:
         with self.lock:
@@ -39,7 +40,7 @@ class MockFS:
             self.mtimes[path] = time.time()
 
     def dirs(self) -> set[str]:
-        out = set()
+        out = set(self.empty_dirs)
         for path in self.files:
             parent = posixpath.dirname(path)
             while parent and parent not in out:
@@ -163,6 +164,21 @@ class MockTransport(Transport):
                 raise TransportError("conflict", f"{target} already exists")
             self.fs.files[target] = self.fs.files.pop(source)
             self.fs.mtimes[target] = self.fs.mtimes.pop(source, time.time())
+
+    def make_dir(self, path: str) -> None:
+        self._enter("mkdir", path)
+        with self.fs.lock:
+            if posixpath.dirname(path) not in self.fs.dirs():
+                raise TransportError("not_found", f"{posixpath.dirname(path)}: not found")
+            self.fs.empty_dirs.add(path)
+
+    def remove(self, path: str) -> None:
+        self._enter("remove", path)
+        with self.fs.lock:
+            if path not in self.fs.files:
+                raise TransportError("not_found", f"{path}: not found")
+            del self.fs.files[path]
+            self.fs.mtimes.pop(path, None)
 
     def run(self, command: str, timeout: float = 20.0) -> CommandResult:
         self._enter("run", command)

@@ -122,7 +122,8 @@ def test_write_config_writes_verifies_and_keeps_comments(qapp, gui, hermes_home)
     assert {r.status for r in dlg.results} == {A.WRITTEN}
     text = main.read_text(encoding="utf-8")
     assert "# my own note, keep me" in text and fast_load(text)["compression"]["threshold"] == 0.42
-    assert list(main.parent.glob("config.yaml.bak_*"))
+    assert list((main.parent / "config-backups").glob("config.yaml.bak_*"))
+    assert not list(main.parent.glob("config.yaml.bak_*"))
     assert not s.drafts.has_changes()
     dlg.close()
 
@@ -1031,7 +1032,7 @@ def test_replace_and_remove_own_files_from_the_page(qapp, tgui, hermes_home):
     _view, t = _roster(qapp, win, [alpha], alpha)
     t._remove_own()
     _write_all(qapp, state, win)
-    assert not own_alpha.exists() and list(own_alpha.parent.glob("teammates.yaml.removed-*"))
+    assert not own_alpha.exists() and list((own_alpha.parent / "config-backups").glob("teammates.yaml.removed-*"))
     assert E.table_for(s, alpha).kind == E.INHERITED
 
 

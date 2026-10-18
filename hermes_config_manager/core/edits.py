@@ -38,7 +38,7 @@ class OpKind(str, Enum):
     REPLACE_BLOCK = "replace_block"  # explicit whole-block replacement
     RENAME_KEY = "rename_key"        # rename the mapping key at ``path`` to ``value``, in place
     REPLACE_FILE = "replace_file"    # the whole file becomes ``text`` (``value`` = its data); creates it if missing
-    DELETE_FILE = "delete_file"      # the file is removed (kept next to itself as a backup)
+    DELETE_FILE = "delete_file"      # the file is removed (kept in its backup folder)
 
 
 # Kinds the path-wise helpers cannot follow: a draft with one of them is read from its whole view.

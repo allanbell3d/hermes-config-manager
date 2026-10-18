@@ -29,7 +29,7 @@ from ..core.edits import EditOp, OpKind, apply_ops, op_already_applied
 from ..core.paths import MISSING, PathT, format_path, get_in
 from ..core.yamlpatch import (PatchError, YamlParseError, diff_paths, fast_load, rename_key, render_patched,
                               strict_equal)
-from ..transports.base import ConflictError, Revision, Transport, TransportError
+from ..transports.base import BACKUP_DIR, ConflictError, Revision, Transport, TransportError
 
 READY = "ready"
 NOOP = "no change"
@@ -222,7 +222,7 @@ def prepare_change(task_ctx, transport: Transport, snap: DraftSnapshot, schema=N
         rebased = True
 
     if snap.removes_file:
-        prepared = PreparedChange(snap, READY, "Removed from its place: the file is kept next to it as "
+        prepared = PreparedChange(snap, READY, f"Removed from its place: the file is kept in {BACKUP_DIR} as "
                                   f"{transport.basename(snap.path)}.removed-<time>.", current_sha, text,
                                   new_text="", target_data=None, rebased=rebased)
         prepared.changes = [Change((), current_data, MISSING)]
@@ -308,20 +308,24 @@ def apply_change(task_ctx, transport: Transport, prepared: PreparedChange) -> Ap
         return ApplyResult(snap.key, snap.display, status, f"Not written: {exc}" if status == FAILED else str(exc))
     return ApplyResult(
         snap.key, snap.display, WRITTEN,
-        "Written and verified by readback" + (f"; backup {written.backup_path}" if written.backup_path else ""),
+        "Written and verified by readback" + (f"; backup {written.backup_path}" if written.backup_path else "")
+        + (f"; old backups not tidied: {written.tidy_error}" if written.tidy_error else ""),
         written.backup_path, written.revision, data, prepared.target_data,
     )
 
 
 def _remove_file(transport: Transport, prepared: PreparedChange) -> ApplyResult:
-    """Remove the file by renaming it to ``<name>.removed-<UTC time>`` (the removal is its own backup)."""
+    """Remove the file by moving it into its backup folder as ``<name>.removed-<UTC time>`` (the removal is
+    its own backup; it is never rotated away)."""
     snap = prepared.snapshot
     try:
         current = transport.read_bytes(snap.path)
         if current.revision.sha256 != prepared.current_sha:
             return ApplyResult(snap.key, snap.display, CONFLICT, "Not removed: the file changed on the host since "
                                "it was checked.")
-        target = f"{snap.path}.removed-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+        folder = transport.ensure_backup_dir(snap.path)
+        target = transport.join(folder, f"{transport.basename(snap.path)}.removed-"
+                                        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
     except TransportError as exc:
         return ApplyResult(snap.key, snap.display, FAILED, f"Not removed: {exc}")
     try:

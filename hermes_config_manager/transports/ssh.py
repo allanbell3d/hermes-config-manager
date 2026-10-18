@@ -354,6 +354,19 @@ class SSHTransport(Transport):
 
         self._call(source, op)
 
+    def make_dir(self, path: str) -> None:
+        def op(sftp):
+            try:
+                sftp.mkdir(path)
+            except OSError:
+                if not statmod.S_ISDIR(sftp.stat(path).st_mode or 0):     # made meanwhile: fine
+                    raise
+
+        self._call(path, op)
+
+    def remove(self, path: str) -> None:
+        self._call(path, lambda sftp: sftp.remove(path))
+
     def replace_bytes(self, path: str, data: bytes) -> None:
         def op(sftp):
             tmp = f"{path}.hm-{uuid.uuid4().hex[:12]}.tmp"

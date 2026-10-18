@@ -1,3 +1,3 @@
 """Hermes Config Manager - desktop configuration manager for Hermes agents."""
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"

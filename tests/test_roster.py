@@ -198,7 +198,9 @@ def test_removing_a_file_keeps_it_as_a_renamed_backup():
     prepared, result = _write(t, [EditOp(OpKind.DELETE_FILE, ())], own)
     assert prepared.status == A.READY and result.status == A.WRITTEN
     assert own not in t.fs.files
-    kept = [p for p in t.fs.files if p.startswith(own + ".removed-")]
+    folder = own.rsplit("/", 1)[0] + "/config-backups/"
+    kept = [p for p in t.fs.files if p.startswith(folder + "teammates.yaml.removed-")]
+    assert t.fs.files[folder + ".gitignore"] == b"*\n"
     assert len(kept) == 1 and t.fs.files[kept[0]].decode() == ROSTER_YAML and result.backup_path == kept[0]
 
 

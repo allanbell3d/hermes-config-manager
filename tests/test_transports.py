@@ -45,6 +45,8 @@ def test_local_write_checked_backup_and_conflict(tmp_path):
     result = t.write_checked(path, b"model:\n  model: b\n", before.revision.sha256)
     assert result.verified and result.backup_path and os.path.exists(result.backup_path)
     assert open(result.backup_path, "rb").read() == before.data
+    folder = tmp_path / "config-backups"                    # in a folder next to the file, ignored by git
+    assert Path(result.backup_path).parent == folder and (folder / ".gitignore").read_bytes() == b"*\n"
     # Stale expectation => conflict, file untouched.
     with pytest.raises(ConflictError):
         t.write_checked(path, b"model:\n  model: c\n", before.revision.sha256)
@@ -72,7 +74,7 @@ def test_mock_faults_and_disconnect():
     t = mock_host({"/home/u/.hermes/config.yaml": "a: 1\n", "/home/u/.hermes/profiles/p/config.yaml": "b: 2\n"})
     found = discover_config_paths(t, "/home/u/.hermes", ("config.yaml", "profiles/*/config.yaml"))
     assert [n for n, _ in found] == ["", "p"]
-    t.inject("write", "permission", path_contains="profiles/p", times=1)
+    t.inject("write", "permission", path_contains="profiles/p/config.yaml", times=1)
     rev = t.read_bytes(found[1][1]).revision.sha256
     with pytest.raises(TransportError) as info:
         t.write_checked(found[1][1], b"b: 3\n", rev)
@@ -84,6 +86,61 @@ def test_mock_faults_and_disconnect():
     with pytest.raises(TransportError) as info:
         t.read_bytes(found[0][1])
     assert info.value.kind == "unavailable"
+
+
+def _bak(name: str, when, n: int = 1) -> str:
+    return f"{name}.bak_{when.strftime('%Y%m%d_%H%M%S')}" + (f"_{n}" if n > 1 else "")
+
+
+def test_backups_keep_the_ten_newest_and_every_one_younger_than_a_week():
+    from datetime import datetime, timedelta
+
+    from hermes_config_manager.transports.base import expired_backups
+
+    now = datetime(2026, 10, 18, 12, 0, 0)
+    old = [_bak("config.yaml", now - timedelta(days=30 + i)) for i in range(5)]       # a month ago
+    burst = [_bak("config.yaml", now - timedelta(hours=1), n) for n in range(1, 13)]  # 12 writes today
+    others = ["config.yaml.bak_garbage", "notes.txt", ".gitignore", _bak("teammates.yaml", now - timedelta(days=90))]
+    assert expired_backups("config.yaml", old + burst + others, now) == old           # a week of copies stays
+    week = [_bak("config.yaml", now - timedelta(days=8 + i)) for i in range(12)]      # all older than a week
+    gone = expired_backups("config.yaml", week + others, now)
+    assert gone == week[10:]                                                          # the 10 newest stay
+    assert expired_backups("config.yaml", week[:10], now) == []
+
+
+def test_a_write_moves_old_backups_into_the_folder_and_rotates_them(tmp_path):
+    from datetime import datetime, timedelta
+
+    make_tree(tmp_path)
+    path = str(tmp_path / "config.yaml")
+    long_ago = datetime.now() - timedelta(days=40)
+    for i in range(14):                                     # left next to the file by an earlier version
+        (tmp_path / _bak("config.yaml", long_ago - timedelta(days=i))).write_bytes(b"old\n")
+    (tmp_path / "config.yaml.bak_mine").write_bytes(b"not ours\n")
+    t = LocalTransport(HostConfig("h", hermes_root=str(tmp_path)))
+    result = t.write_checked(path, b"model:\n  model: b\n", t.read_bytes(path).revision.sha256)
+    assert not result.tidy_error
+    folder = tmp_path / "config-backups"
+    kept = sorted(p.name for p in folder.glob("config.yaml.bak_*"))
+    assert len(kept) == 10 and Path(result.backup_path).name in kept                 # the new one + 9 newest old
+    assert _bak("config.yaml", long_ago) in kept and _bak("config.yaml", long_ago - timedelta(days=13)) not in kept
+    assert sorted(p.name for p in tmp_path.glob("config.yaml.bak_*")) == ["config.yaml.bak_mine"]
+    assert (tmp_path / "profiles" / "alpha" / "config.yaml").exists()
+
+
+def test_a_write_succeeds_when_old_backups_cannot_be_deleted():
+    from datetime import datetime, timedelta
+
+    root = "/home/u/.hermes"
+    long_ago = datetime.now() - timedelta(days=40)
+    files = {f"{root}/config.yaml": "a: 1\n"}
+    files.update({f"{root}/config-backups/{_bak('config.yaml', long_ago - timedelta(days=i))}": "old\n"
+                  for i in range(12)})
+    t = mock_host(files)
+    t.inject("remove", "permission", path_contains="config-backups")
+    result = t.write_checked(f"{root}/config.yaml", b"a: 2\n", t.read_bytes(f"{root}/config.yaml").revision.sha256)
+    assert t.fs.files[f"{root}/config.yaml"] == b"a: 2\n" and result.backup_path in t.fs.files
+    assert "injected failure" in result.tidy_error
 
 
 def test_revision_identity():

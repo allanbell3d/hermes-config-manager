@@ -305,7 +305,8 @@ class ReviewDialog(QDialog):
         self.write = btn("Write config", pri=True,
                          tip="Write every staged change to the agents' config.yaml files. Only the changed keys "
                              "are touched (comments and layout are kept); each file is backed up first "
-                             "(config.yaml.bak_…) and read back to check. A file changed elsewhere is skipped.")
+                             "(config-backups/config.yaml.bak_… next to it) and read back to check. A file changed "
+                             "elsewhere is skipped.")
         self.write.clicked.connect(self._write)
         f.addWidget(self.write)
         self.files = label("", tone="muted")

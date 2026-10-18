@@ -240,8 +240,8 @@ class RosterTable(QWidget):
         rb.setMenu(menu)
         h.addWidget(rb)
         dl = btn("Remove own file", sm=True, tip="Remove the checked profiles' own roster files, so they use the main "
-                                                 "agent's roster (roster_source fallback). The file is kept next "
-                                                 f"to itself as {RM.FILE}.removed-<time>. Goes to Review.")
+                                                 "agent's roster (roster_source fallback). The file is kept in "
+                                                 f"config-backups as {RM.FILE}.removed-<time>. Goes to Review.")
         dl.setEnabled(self._can_remove(targets))
         dl.clicked.connect(self._remove_own)
         h.addWidget(dl)
@@ -748,7 +748,7 @@ class RosterTable(QWidget):
             add(f"Replace roster with {ref}'s roster", f"Gives the checked profiles a copy of {ref}'s roster file, "
                 "exactly as it is on the host. Goes to Review.", lambda: self._replace(view.agent), can_replace)
         add("Remove own file", "Removes the checked profiles' own roster files, so they use the main agent's roster "
-            f"(the file is kept as {RM.FILE}.removed-<time>). Goes to Review.", self._remove_own,
+            f"(the file is kept in config-backups as {RM.FILE}.removed-<time>). Goes to Review.", self._remove_own,
             self._can_remove(targets))
         return m
 

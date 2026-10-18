@@ -28,9 +28,14 @@ others.
 - **`config.yaml` files**, and only when you press **Write config** in Review. Only the keys you changed are
   rewritten; comments and layout stay.
 - **hermes-teammates roster files**, only on hosts that use that optional plugin (`teammates.yaml` next to
-  `config.yaml`, see [Teammates](#teammates)), the same way. Removing a profile's own roster file renames it to
-  `teammates.yaml.removed-<date-time>`.
-- **A backup next to each written file**: `config.yaml.bak_<date-time>`. The app never deletes them.
+  `config.yaml`, see [Teammates](#teammates)), the same way. Removing a profile's own roster file moves it
+  into its `config-backups` folder as `teammates.yaml.removed-<date-time>`.
+- **A backup of each written file** in a `config-backups` folder next to it (`~/.hermes/config-backups`,
+  `profiles/<name>/config-backups`): `config.yaml.bak_<date-time>`, `teammates.yaml.bak_<date-time>`.
+  The folder holds a `.gitignore` of `*`, so git never sees it. Each file keeps its **10 newest backups and every
+  backup younger than 7 days**; older ones are deleted after a write. Backups left next to a file by earlier
+  versions (`config.yaml.bak_*`) are moved into the folder on its next write and kept by the same rule. A
+  removed roster file is never deleted.
 - **Gateways are restarted only when you ask**: the "Restart gateways of written agents" box in Review
   (off every time Review opens) or Restart in an agent's right-click menu.
 
@@ -76,7 +81,7 @@ Writing only touches the keys that changed (comments and layout are kept). When 
 is re-read. If a file changed elsewhere, your edits are applied to the newer file when the settings you
 edited were not touched there; if they were, the file is marked and not written until you stage those
 settings again. A file that already has your values is marked up to date.
-Each written file is backed up (`config.yaml.bak_…`), written and read back to verify. Closing the window
+Each written file is backed up (in `config-backups`, see above), written and read back to verify. Closing the window
 with edits that are not written asks first; an unexpected error is saved (credentials masked) to
 `errors.log` in the app's log folder.
 

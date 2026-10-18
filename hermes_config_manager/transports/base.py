@@ -8,10 +8,42 @@ Every operation is blocking and is expected to run in a worker thread
 from __future__ import annotations
 
 import hashlib
+import re
 import socket
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import BinaryIO, Sequence
+
+# Backups go into a folder next to the file they copy; each file keeps its newest KEEP_COPIES copies and
+# every copy younger than KEEP_DAYS (a day of many writes never pushes out the older, known-good copies).
+BACKUP_DIR = "config-backups"
+KEEP_COPIES = 10
+KEEP_DAYS = 7
+_STAMP = re.compile(r"(\d{8}_\d{6})(?:_(\d+))?")
+
+
+def backup_stamp(name: str, filename: str) -> tuple[datetime, int] | None:
+    """(time, suffix) of ``filename`` when it is a backup of the file ``name`` (``<name>.bak_<stamp>[_n]``)."""
+    prefix = f"{name}.bak_"
+    if not filename.startswith(prefix):
+        return None
+    m = _STAMP.fullmatch(filename[len(prefix):])
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S"), int(m.group(2) or 1)
+    except ValueError:
+        return None
+
+
+def expired_backups(name: str, filenames: Sequence[str], now: datetime) -> list[str]:
+    """The backups of ``name`` to delete: all but the KEEP_COPIES newest and those younger than KEEP_DAYS.
+
+    Files that are not backups of ``name`` are never listed.
+    """
+    dated = sorted(((s, f) for f in filenames if (s := backup_stamp(name, f)) is not None), reverse=True)
+    limit = now - timedelta(days=KEEP_DAYS)
+    return [f for i, ((when, _n), f) in enumerate(dated) if i >= KEEP_COPIES and when < limit]
 
 
 class TransportError(OSError):
@@ -81,6 +113,7 @@ class WriteResult:
     revision: Revision
     backup_path: str | None
     verified: bool
+    tidy_error: str = ""          # old backups could not be moved or deleted (the write itself succeeded)
 
 
 class Transport:
@@ -138,6 +171,14 @@ class Transport:
         """Rename ``source`` to ``target``; refuses (``conflict``) when ``target`` exists."""
         raise NotImplementedError
 
+    def make_dir(self, path: str) -> None:
+        """Create the folder ``path`` (its parent exists); nothing happens when it exists already."""
+        raise NotImplementedError
+
+    def remove(self, path: str) -> None:
+        """Delete the file ``path`` (only old backups are ever deleted)."""
+        raise NotImplementedError
+
     # --- commands ---------------------------------------------------------
     def run(self, command: str, timeout: float = 20.0) -> CommandResult:
         raise TransportError("unsupported", f"Commands are not available for host '{self.host.name}'.")
@@ -146,13 +187,30 @@ class Transport:
         pass
 
     # --- composite operations (shared by all transports) ------------------
+    def backup_dir(self, path: str) -> str:
+        """The folder that keeps the backups of ``path``: config-backups next to it."""
+        return self.join(self.parent(path), BACKUP_DIR)
+
+    def ensure_backup_dir(self, path: str) -> str:
+        """Create the backup folder of ``path`` when missing, with a .gitignore of ``*``: git then ignores
+        everything in it, the .gitignore too, so the folder never shows up in a repository."""
+        folder = self.backup_dir(path)
+        if not self.exists(folder):
+            self.make_dir(folder)
+        ignore = self.join(folder, ".gitignore")
+        if not self.exists(ignore):
+            self.replace_bytes(ignore, b"*\n")
+        return folder
+
     def backup(self, path: str) -> str:
-        """Copy ``path`` next to itself as ``<name>.bak_<timestamp>``; returns the copy's path."""
+        """Copy ``path`` into its backup folder as ``<name>.bak_<timestamp>``; returns the copy's path."""
+        folder = self.ensure_backup_dir(path)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        candidate = f"{path}.bak_{stamp}"
+        base = self.join(folder, f"{self.basename(path)}.bak_{stamp}")
+        candidate = base
         suffix = 2
         while self.exists(candidate):
-            candidate = f"{path}.bak_{stamp}_{suffix}"
+            candidate = f"{base}_{suffix}"
             suffix += 1
         self.copy_file(path, candidate)
         copied = self.read_bytes(candidate).revision
@@ -160,6 +218,25 @@ class Transport:
         if copied.sha256 != original.sha256:
             raise TransportError("other", f"Backup verification failed for {candidate}.")
         return candidate
+
+    def tidy_backups(self, path: str, now: datetime | None = None) -> list[str]:
+        """Move the old ``<name>.bak_*`` copies lying next to ``path`` into its backup folder, then delete the
+        expired ones there (see :func:`expired_backups`).  Returns the deleted paths."""
+        name = self.basename(path)
+        folder = self.backup_dir(path)
+        for e in self.list_dir(self.parent(path)):
+            if not e.is_dir and backup_stamp(name, e.name) is not None:
+                try:
+                    self.rename(e.path, self.join(folder, e.name))
+                except TransportError as exc:
+                    if exc.kind != "conflict":          # the same name in the folder already: leave it
+                        raise
+        names = [e.name for e in self.list_dir(folder) if not e.is_dir]
+        gone = []
+        for f in expired_backups(name, names, now or datetime.now()):
+            self.remove(self.join(folder, f))
+            gone.append(self.join(folder, f))
+        return gone
 
     def write_checked(self, path: str, data: bytes, expected_sha: str | None, make_backup: bool = True) -> WriteResult:
         """Safe write: conflict check → backup → atomic replace → readback.
@@ -190,7 +267,13 @@ class Transport:
                 "uncertain",
                 f"Readback of {path} does not match what was written; backup kept at {backup_path}.",
             )
-        return WriteResult(readback.revision, backup_path, True)
+        tidy_error = ""
+        if backup_path is not None:
+            try:
+                self.tidy_backups(path)
+            except TransportError as exc:
+                tidy_error = str(exc)
+        return WriteResult(readback.revision, backup_path, True, tidy_error)
 
 
 def classify_exception(exc: BaseException, what: str) -> TransportError:
