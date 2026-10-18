@@ -27,6 +27,9 @@ others.
 
 - **`config.yaml` files**, and only when you press **Write config** in Review. Only the keys you changed are
   rewritten; comments and layout stay.
+- **hermes-teammates roster files**, only on hosts that use that optional plugin (`teammates.yaml` next to
+  `config.yaml`, see [Teammates](#teammates)), the same way. Removing a profile's own roster file renames it to
+  `teammates.yaml.removed-<date-time>`.
 - **A backup next to each written file**: `config.yaml.bak_<date-time>`. The app never deletes them.
 - **Gateways are restarted only when you ask**: the "Restart gateways of written agents" box in Review
   (off every time Review opens) or Restart in an agent's right-click menu.
@@ -99,6 +102,36 @@ The model picker offers the models in your model list plus the models your agent
 picker opens it in your text editor (it is created from an example when missing); **Other file…** uses another
 file instead, for example one shared with a team. The picker reads the file again each time it opens. Without
 a list, the picker uses the model lists of the hosts' own Hermes (`provider_models_cache.json`).
+
+### Teammates
+
+[hermes-teammates](https://github.com/100yenadmin/hermes-teammates) is an **optional, third-party** Hermes
+plugin: it is not part of Hermes Agent or of this app, and the app never installs it. You need it only to use
+this page; without it everything else works the same and the page only says that no host uses the plugin.
+
+On hosts that have the plugin, **Models › Teammates** edits its rosters. A roster is a YAML file with one
+top-level `teammates` mapping, kept next to the agent's `config.yaml` (usually `teammates.yaml`). Which roster
+an agent uses is set in its `config.yaml`, under `plugins.entries.hermes-teammates.settings`:
+
+- `roster_file`: the agent's roster file (relative to its folder). A file the agent does not point at is not
+  used;
+- `roster_source`: `own` (its own roster), `root` (the main agent's) or `fallback` (its own when it has a
+  teammate, otherwise the main agent's).
+
+The page shows the roster the agent uses: the main agent edits the master; a profile with its own file edits
+that file; a profile that uses the main agent's roster, or keeps its roster in `config.yaml` itself, shows it
+read-only. **Replace roster** gives the checked profiles a copy of the master (or of the shown agent's file),
+exactly as written, and sets their `roster_file` when it is not set; **Remove own file** sends a profile with
+`roster_source: fallback` back to the main agent's roster.
+
+Teammates are edited like the model chains: name, description, route and model (with the model picker),
+reasoning effort, toolsets and instructions; `max_live_runs` above the table is each agent's own `config.yaml`
+setting. **Stage** puts exactly the edited cells into the rosters of the checked agents; an amber dot shows where
+they differ (click it: who has what), and teammates only some of them have are listed with "in k of N". A rename
+keeps the teammate's place and comments. The plugin checks each teammate on its own (a bad one is skipped, the
+rest still work), so the page marks such teammates and Review refuses a write that would make one unusable.
+The plugin reads the roster on every call; a new teammate's name shows in its tools after a gateway restart.
+Right-click the table for every action on a cell, a teammate or the whole roster, as on the model chains.
 
 ### Arranging the settings
 

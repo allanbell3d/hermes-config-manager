@@ -18,9 +18,11 @@ from ..core.layout import Layout, default_layout, reconcile
 from ..core.my_defaults import DefaultsStore
 from ..core.paths import MISSING, PathT
 from ..core.schema import DATA_DIR, schema_from_payload
-from ..core.settings_tree import Node, SettingsModel, build_model, leaves, shape, union_shape, used_paths
+from ..core.settings_tree import (TEAMMATES_SECTION, Node, SettingsModel, build_model, leaves, shape, union_shape,
+                                  used_paths)
 from ..services.catalog_loader import CatalogLoader
 from ..services.editing import DefaultInfo, EditScope, canonical
+from ..services.roster_edit import RosterWork, has_rosters
 from ..services.work import WorkStore
 
 SCHEMA_FILE = DATA_DIR / "hermes_schema.json"
@@ -53,11 +55,13 @@ class AppState(QObject):
         self.hub = self
         self.work = WorkStore()
         self.work.subscribe(self.work_changed.emit)
+        self.roster_work = RosterWork()        # the Teammates page's edits, not staged yet
         self.defaults = DefaultsStore(appdirs.config_dir() / "my_defaults.json")
         self._shapes: dict[str, tuple[str, dict]] = {}
         self.present: dict[PathT, Any] = {}
         self.used: set[PathT] | None = None
         self.model: SettingsModel = build_model(self.payload, self.schema, {})
+        session.reasoning_levels = list(self.model.efforts)
         self.layout: Layout = self._load_layout()
         self.blk_open: dict[str, bool] = self._json("ui/blocks", {})
         self.grp_open: set[str] = set(self._json("ui/groups", []))
@@ -75,6 +79,7 @@ class AppState(QObject):
         session.agents_changed.connect(self._data_timer.start)
         session.agent_updated.connect(lambda _k: self._data_timer.start())
         session.refresh_finished.connect(self._data_timer.start)
+        session.rosters_loaded.connect(self._data_timer.start)
         session.checked_changed.connect(self._scope_changed)
         session.viewed_changed.connect(lambda _k: self._scope_changed())
         session.drafts_changed.connect(lambda _keys: self.values_changed.emit())
@@ -110,8 +115,11 @@ class AppState(QObject):
         self.present = present
         if structural:
             self.model = build_model(self.payload, self.schema, present)
+            self.session.reasoning_levels = list(self.model.efforts)
             self.layout = reconcile(self.layout, self.model)
         self.used = used_paths(self.model, present) if shapes else None
+        if self.used is not None and has_rosters(self.session):
+            self.used.add(("@section", TEAMMATES_SECTION))   # some host uses hermes-teammates
         self._scope_cache = None
         if structural:
             self.model_changed.emit()

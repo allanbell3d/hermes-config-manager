@@ -63,6 +63,21 @@ def test_reconcile_places_new_sections_and_drops_unknown_ones():
     assert "brand_new" in placed and "gone_section" not in placed
 
 
+def test_a_saved_layout_gets_the_teammates_page_where_the_plan_puts_it():
+    from hermes_config_manager.core.settings_tree import TEAMMATES_SECTION
+
+    m = model_for()
+    assert m.sections[TEAMMATES_SECTION].chain == "roster" and m.default_category(TEAMMATES_SECTION) == "models"
+    assert [p.label for p in default_layout(m).cats[0].pages][:3] == ["Models", "Teammates", "Advanced"]
+    saved = default_layout(m)
+    models = next(c for c in saved.cats if c.id == "models")
+    models.pages = [p for p in models.pages if p.label != "Teammates"]   # saved before the page existed
+    again = reconcile(Layout.from_json(json.loads(json.dumps(saved.to_json()))), m)
+    models = next(c for c in again.cats if c.id == "models")
+    assert [p.label for p in models.pages][:3] == ["Models", "Teammates", "Advanced"]
+    assert models.pages[1].sections == [TEAMMATES_SECTION]
+
+
 def test_visibility_follows_the_loaded_files_until_the_user_decides():
     data = {"display": {"compact": True}}
     m = model_for([data])
@@ -192,7 +207,7 @@ def test_removing_a_tasks_entry_removes_its_model_keys_and_keeps_its_other_setti
     assert work.chain_rows("aux:vision", scope, k) == [] and work.chain_dirty("aux:vision", scope)
     assert work.stage_chain("aux:vision", scope) == 1
     d = session.drafts.draft(k)
-    for leaf in ("provider", "model", "reasoning_effort", "fallback_chain"):
+    for leaf in ("provider", "model", "reasoning_effort", "fallback_chain", "base_url"):
         assert d.get(("auxiliary", "vision", leaf)) is MISSING
     assert d.get(("auxiliary", "vision", "timeout")) == 120     # not part of the model entry: kept
     assert rows_of(C.read_chain(scope, spec, k)) == []

@@ -328,7 +328,8 @@ def entry_removal_ops(scope, spec: C.ChainSpec, agent: str, origin: str) -> list
     block = scope.draft_value(agent, spec.head)
     if not isinstance(block, dict):
         return []
-    owned = [k for k in block if k in TASK_CHAIN_KEYS]
+    # the model's keys, and the endpoint keys that belonged to its provider (as on a provider change)
+    owned = [k for k in block if k in TASK_CHAIN_KEYS or k in ("base_url", "api_mode")]
     if not owned:
         return []
     if len(owned) == len(block):

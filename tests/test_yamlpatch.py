@@ -239,3 +239,55 @@ def test_corpus_random_edits_are_minimal_and_verified(path):
     target.setdefault("delegation", {})["added_by_test"] = "yes"
     res = render_patched(text, target)
     assert strict_equal(fast_load(res.text), target)
+
+
+# ------------------------------------------------------------------ renaming a key in place
+ROSTER_TEXT = (
+    "# teammates roster\r\n"
+    "teammates:\r\n"
+    "  drafter:            # small things\r\n"
+    "    description: Small edits.\r\n"
+    "    model: small-model\r\n"
+    "\r\n"
+    "  'deep-work':\r\n"
+    "    description: Long tasks.\r\n"
+    "    model: big-model   # the expensive one\r\n"
+    "  last:\r\n"
+    "    description: Last.\r\n"
+    "    model: m\r\n"
+)
+
+
+def test_rename_key_changes_only_the_key_and_keeps_position_and_comments():
+    from hermes_config_manager.core.yamlpatch import rename_key
+
+    out = rename_key(ROSTER_TEXT, ("teammates", "drafter"), "writer")
+    assert out == ROSTER_TEXT.replace("  drafter:            # small things", "  writer:            # small things")
+    assert list(fast_load(out)["teammates"]) == ["writer", "deep-work", "last"]
+    quoted = rename_key(ROSTER_TEXT, ("teammates", "deep-work"), "long work: big")
+    data = fast_load(quoted)
+    assert list(data["teammates"]) == ["drafter", "long work: big", "last"]
+    assert "# the expensive one" in quoted and quoted.count("\r\n") == ROSTER_TEXT.count("\r\n")
+
+
+def test_rename_key_refuses_an_existing_name_or_a_missing_key():
+    from hermes_config_manager.core.yamlpatch import PatchError, rename_key
+
+    with pytest.raises(PatchError):
+        rename_key(ROSTER_TEXT, ("teammates", "drafter"), "last")
+    with pytest.raises(PatchError):
+        rename_key(ROSTER_TEXT, ("teammates", "nope"), "x")
+
+
+def test_rename_op_keeps_the_order_and_earlier_edits_under_the_old_name():
+    from hermes_config_manager.core.edits import AgentDraft, EditOp, OpKind, apply_ops
+
+    base = fast_load(ROSTER_TEXT)
+    draft = AgentDraft("k#teammates", base, "sha")
+    draft.add(EditOp(OpKind.SET, ("teammates", "drafter", "model"), "other-model"))
+    draft.add(EditOp(OpKind.RENAME_KEY, ("teammates", "drafter"), "writer"))
+    view = draft.view()
+    assert list(view["teammates"]) == ["writer", "deep-work", "last"]
+    assert view["teammates"]["writer"]["model"] == "other-model"
+    assert draft.get(("teammates", "writer", "model")) == "other-model"
+    assert apply_ops(base, [EditOp(OpKind.DELETE_FILE, ())]) == {}

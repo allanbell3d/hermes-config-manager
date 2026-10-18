@@ -13,9 +13,11 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QS
 from ..core.paths import MISSING, format_path
 from ..core.settings_tree import leaves
 from ..services import chains as C
+from ..services.roster_edit import differ_count, table_for
 from ..services.work import REMOVE, move_key_ops, rows_of, spec_for, unstage_chain
 from .aux_panel import AuxPanel
 from .chain_table import ChainTable, chain_title
+from .roster_table import RosterTable
 from .settings_table import Ctx, GroupRow, SettingsTable, gid, sum_html
 from .theme import T, mono, sans
 from .widgets import set_only_link, clear_layout, Chevron, Clickable, ElideLabel, IconButton, Switch, btn, differ, label, link, plural
@@ -359,6 +361,13 @@ class PageView(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
         has = False
+        if sec.chain == "roster":
+            if (qm and ctx.q) or (ctx.only_diff and not differ_count(st.session, st.scope().usable_keys)):
+                return None
+            t = RosterTable(self, ctx)
+            self.chains.append(t)
+            v.addWidget(t)
+            return box
         if not sec.chain:
             t = SettingsTable(self, sec.own_nodes(), ctx, hid_key=f"@hid:{k}")
             if qm and t.empty:
@@ -512,6 +521,11 @@ class PageView(QWidget):
     def block_summary(self, k: str) -> str:
         st = self.state
         sec = st.model.sections[k]
+        if sec.chain == "roster":
+            ref = st.ref_key()
+            n = len(table_for(st.session, ref).teammates) if ref else 0
+            d = differ_count(st.session, st.scope().usable_keys)
+            return plural(n, "teammate") + (f" · <b style='color:{T['amber']}'>{differ(d)}</b>" if d else "")
         own = st.visible_leaves(sec.own_nodes())
         d = st.count_differ(own)
         if not sec.chain:
@@ -539,6 +553,8 @@ class PageView(QWidget):
             if sec is None:
                 continue
             n += len(st.visible_leaves(sec.own_nodes()))
+            if sec.chain == "roster" and st.ref_key():
+                n += len(table_for(st.session, st.ref_key()).teammates)
             if sec.chain == "auxiliary":
                 for t in st.model.tasks:
                     if not st.task_hidden(t):

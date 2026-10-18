@@ -341,6 +341,19 @@ class SSHTransport(Transport):
 
         self._call(target, op)
 
+    def rename(self, source: str, target: str) -> None:
+        def op(sftp):
+            try:
+                sftp.stat(target)
+            except OSError as exc:
+                if getattr(exc, "errno", None) != 2 and not isinstance(exc, FileNotFoundError):
+                    raise
+            else:
+                raise TransportError("conflict", f"{target} already exists")
+            sftp.rename(source, target)            # SFTP rename refuses an existing target too
+
+        self._call(source, op)
+
     def replace_bytes(self, path: str, data: bytes) -> None:
         def op(sftp):
             tmp = f"{path}.hm-{uuid.uuid4().hex[:12]}.tmp"

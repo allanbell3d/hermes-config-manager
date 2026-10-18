@@ -929,3 +929,307 @@ def test_an_empty_value_cell_says_not_set(qapp, gui):
     assert isinstance(ed, LineEditor)
     ed.show_value(MISSING)
     assert ed.ed.text() == "" and ed.ed.placeholderText() == "not set"
+
+
+# ------------------------------------------------------------------ hermes-teammates roster page
+@pytest.fixture()
+def tgui(qapp, hermes_home):
+    from hermes_config_manager.services.session import Session
+    from hermes_config_manager.transports.hosts import HostConfig
+
+    from .test_roster import add_teammates
+
+    add_teammates(hermes_home)
+    session = Session(hosts=[HostConfig("local", hermes_root=str(hermes_home))], use_cache=False)
+    state, win = make(qapp, session)
+    pump(qapp, lambda: len(session.docs) == 2 and not session.is_refreshing(), 10)
+    pump(qapp, lambda: False, 0.3)
+    yield state, win
+    session.drafts.discard()
+    win.close()
+    session.shutdown()
+
+
+def _roster(qapp, win, keys, viewed):
+    s = win.state.session
+    s.replace_checked(keys)
+    s.set_viewed(viewed)
+    pump(qapp, lambda: False, 0.1)
+    view = page_with(win, "hermes-teammates")
+    return view, next(c for c in view.chains if c.key == "roster")
+
+
+def _write_all(qapp, state, win):
+    from hermes_config_manager.gui.review import ReviewDialog, build_groups
+
+    dlg = ReviewDialog(state, win)
+    dlg.restart.setChecked(False)
+    groups = build_groups(state)
+    dlg._write()
+    assert pump(qapp, lambda: not dlg.running, 30)
+    results = list(dlg.results)
+    dlg.close()
+    return groups, results
+
+
+def test_the_teammates_page_is_in_the_menu_and_shows_the_roster_each_agent_uses(qapp, tgui):
+    from hermes_config_manager.services import roster_edit as E
+
+    state, win = tgui
+    s = state.session
+    main, alpha, beta, gamma = s.ordered_keys()
+    page = state.layout.page_of("hermes-teammates")
+    assert page.label == "Teammates" and state.page_shown(state.layout.cat_of(page.id), page)
+    _view, t = _roster(qapp, win, [beta], beta)
+    assert t.view.kind == E.INHERITED and not t.view.editable
+    assert any("roster_source fallback" in x for x in _texts(t))
+    _view, t = _roster(qapp, win, [main], main)
+    assert t.view.kind == E.MASTER and t.view.editable
+    assert any("used by 2 profiles" in x for x in _texts(t))
+
+
+def test_a_teammate_edit_is_staged_reviewed_and_written_with_its_comments(qapp, tgui, hermes_home):
+    from hermes_config_manager.gui.roster_table import shown_rows
+
+    state, win = tgui
+    s = state.session
+    main, alpha, beta, gamma = s.ordered_keys()
+    _view, t = _roster(qapp, win, [main, alpha, beta], alpha)
+    row = next(r for r in shown_rows(t.view, t.work) if r.orig == "checker")
+    t._set_cell(row, "description", "Checks with care.")
+    row = next(r for r in shown_rows(t.view, t.work) if r.orig == "drafter")
+    t._rename(row, "writer")
+    t.stage()
+    assert t.work.empty
+    groups, results = _write_all(qapp, state, win)
+    assert any(g.crumbs[0] == "teammates roster" for g in groups)
+    assert {r.status for r in results} == {A.WRITTEN} and len(results) == 2      # master + alpha; beta skipped
+    for f in (hermes_home / "teammates.yaml", hermes_home / "profiles" / "alpha" / "teammates.yaml"):
+        text = f.read_text(encoding="utf-8")
+        data = fast_load(text)
+        assert list(data["teammates"]) == ["writer", "checker"]
+        assert data["teammates"]["checker"]["description"] == "Checks with care."
+        assert "  writer:                 # cheap" in text and text.lstrip().startswith("#")
+    assert not (hermes_home / "profiles" / "beta" / "teammates.yaml").exists()
+
+
+def test_replace_and_remove_own_files_from_the_page(qapp, tgui, hermes_home):
+    from hermes_config_manager.services import roster_edit as E
+
+    state, win = tgui
+    s = state.session
+    main, alpha, beta, gamma = s.ordered_keys()
+    own_alpha = hermes_home / "profiles" / "alpha" / "teammates.yaml"
+    own_gamma = hermes_home / "profiles" / "gamma" / "teammates.yaml"
+    _view, t = _roster(qapp, win, [gamma], gamma)
+    t._replace(None)                                        # gamma gets the master and its roster_file
+    assert E.table_for(s, gamma).pending == "create"
+    _write_all(qapp, state, win)
+    assert own_gamma.read_bytes() == (hermes_home / "teammates.yaml").read_bytes()
+    assert "roster_file: teammates.yaml" in (own_gamma.parent / "config.yaml").read_text(encoding="utf-8")
+    assert pump(qapp, lambda: E.table_for(s, gamma).kind == E.OWN, 5)
+    _view, t = _roster(qapp, win, [alpha], alpha)
+    t._remove_own()
+    _write_all(qapp, state, win)
+    assert not own_alpha.exists() and list(own_alpha.parent.glob("teammates.yaml.removed-*"))
+    assert E.table_for(s, alpha).kind == E.INHERITED
+
+
+def test_an_added_teammate_cannot_take_a_name_that_is_still_in_use(qapp, tgui):
+    from hermes_config_manager.gui.roster_table import shown_rows
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    drafter = next(r for r in shown_rows(t.view, t.work) if r.orig == "drafter")
+    t._rename(drafter, "writer")
+    t._add_teammate()
+    added = next(r for r in shown_rows(t.view, t.work) if r.added)
+    assert added.name != "drafter"
+    t._rename(added, "drafter")                                 # the renamed teammate's old name: refused
+    assert "drafter" not in t.work.added and t.work.renames == {"drafter": "writer"}
+    t._rename(added, "Writer2")                                 # not lowercase: refused
+    assert "Writer2" not in t.work.added
+
+
+def test_max_live_runs_on_the_page_goes_to_the_checked_agents_configs(qapp, tgui):
+    from hermes_config_manager.services import roster as RM
+    from hermes_config_manager.services.work import REMOVE
+
+    state, win = tgui
+    s = state.session
+    main, alpha, beta, gamma = s.ordered_keys()
+    _view, t = _roster(qapp, win, [main, beta], beta)            # beta's roster is read-only; its setting is not
+    assert t._knob_editable()
+    m = t.context_menu((None, "max_live_runs"))
+    assert _act(m, "Show who has which value").isEnabled()      # 6 on main, not set on beta
+    t._set_knob(9)
+    t.stage()
+    for k in (main, beta):
+        assert s.drafts.draft(k).view()["plugins"]["entries"]["hermes-teammates"]["settings"]["max_live_runs"] == 9
+        assert not s.drafts.has_changes(RM.doc_key(k))
+    t.unstage()
+    assert not s.drafts.has_changes(main) and not s.drafts.has_changes(beta)
+    t._set_knob(REMOVE)                                         # beta has none: nothing to change
+    assert t.work.empty
+
+
+def test_teammates_only_other_checked_agents_have_get_a_row_and_a_badge(qapp, tgui):
+    from hermes_config_manager.gui.roster_table import shown_rows
+    from hermes_config_manager.services import roster as RM
+
+    state, win = tgui
+    s = state.session
+    main, alpha = s.ordered_keys()[:2]
+    s.docs[RM.doc_key(alpha)].data["teammates"]["reviewer"] = {"description": "Reviews."}
+    _view, t = _roster(qapp, win, [main, alpha], main)
+    rows = shown_rows(t.view, t.work, t._tables)
+    reviewer = next(r for r in rows if r.orig == "reviewer")
+    assert reviewer.elsewhere and reviewer.holders == [alpha]
+    assert any("in 1 of 2" in x for x in _texts(t))
+    t._set_cell(reviewer, "toolsets", ["file"])                 # alpha gets it; main lacks a description for it
+    t.stage()
+    assert s.drafts.draft(RM.doc_key(alpha)).view()["teammates"]["reviewer"]["toolsets"] == ["file"]
+    assert not s.drafts.has_changes(RM.doc_key(main))
+
+
+def test_unstaging_a_rename_in_review_also_unstages_later_edits(qapp, tgui):
+    from hermes_config_manager.gui.review import ReviewDialog, build_groups
+    from hermes_config_manager.gui.roster_table import shown_rows
+    from hermes_config_manager.services import roster as RM
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    checker = next(r for r in shown_rows(t.view, t.work) if r.orig == "checker")
+    t._rename(checker, "verifier")
+    t._set_cell(checker, "description", "Verifies.")
+    t.stage()
+    key = RM.doc_key(main)
+    assert s.drafts.draft(key).view()["teammates"]["verifier"]["description"] == "Verifies."
+    g = next(g for g in build_groups(state) if g.new_label == "renamed to verifier")
+    assert g.whole
+    dlg = ReviewDialog(state, win)
+    dlg._unstage(g)
+    dlg.close()
+    assert not s.drafts.has_changes(key)
+
+
+def test_a_write_that_would_break_a_teammate_keeps_stage_off(qapp, tgui):
+    from hermes_config_manager.gui.roster_table import shown_rows, toolsets_of
+    from hermes_config_manager.services.work import REMOVE
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    checker = next(r for r in shown_rows(t.view, t.work) if r.orig == "checker")
+    t._set_cell(checker, "toolsets", toolsets_of("file, two words, x" + "y" * 60))
+    assert t._problems() and "checker" in t._problems()[0]
+    assert not _act(t.context_menu(), "Stage the roster").isEnabled()
+    assert toolsets_of(" , ") is REMOVE and toolsets_of("a b,c") == ["a", "b", "c"]
+
+
+def test_the_roster_right_click_menu_edits_stages_and_unstages_like_the_chains(qapp, tgui):
+    from hermes_config_manager.services import roster as RM
+    from hermes_config_manager.services.work import REMOVE
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    m = t.context_menu(("drafter", "reasoning_effort"))
+    assert not _act(m, "Discard my edit").isEnabled() and not _act(m, "Unstage").isEnabled()
+    assert not _act(m, "Stage the roster").isEnabled()
+    _act(m, "Not set (no reasoning_effort)").trigger()
+    assert t.work.cells == {("drafter", "reasoning_effort"): REMOVE}
+    _act(t.context_menu(("drafter", "reasoning_effort")), "Discard my edit").trigger()
+    assert t.work.empty
+    _act(t.context_menu(("drafter", "reasoning_effort")), "Not set").trigger()
+    _act(t.context_menu(), "Stage the roster for 1 agent").trigger()
+    key = RM.doc_key(main)
+    assert t.work.empty and "reasoning_effort" not in s.drafts.draft(key).view()["teammates"]["drafter"]
+    m = t.context_menu(("drafter", "model"))
+    assert _act(m, "Pick another model").isEnabled() and _act(m, "Remove teammate drafter").isEnabled()
+    _act(m, "Not set (no route and model)").trigger()
+    assert t.work.cells == {("drafter", "route"): REMOVE, ("drafter", "model"): REMOVE}
+    _act(t.context_menu(), "Discard my roster edits").trigger()
+    _act(t.context_menu(("drafter", "model")), "Unstage").trigger()
+    assert not s.drafts.has_changes(key)
+
+
+def test_the_roster_menu_on_a_name_and_on_instructions(qapp, tgui):
+    from hermes_config_manager.gui.roster_table import shown_rows
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    drafter = next(r for r in shown_rows(t.view, t.work) if r.orig == "drafter")
+    t._rename(drafter, "writer")
+    _act(t.context_menu(("drafter", "name")), "Undo the rename (back to drafter)").trigger()
+    assert t.work.empty
+    _act(t.context_menu(("drafter", "name")), "Remove teammate drafter").trigger()
+    assert t.work.removed == {"drafter"}
+    _act(t.context_menu(("drafter", "name")), "Keep teammate drafter").trigger()
+    assert t.work.empty
+    m = t.context_menu(("checker", "instructions"))
+    assert _act(m, "Edit instructions").isEnabled() and not _act(m, "Not set (no instructions)").isEnabled()
+    m = t.context_menu(("checker", "toolsets"))
+    _act(m, "Not set (no toolsets)").trigger()
+    assert ("checker", "toolsets") in t.work.cells
+
+
+def test_the_roster_menu_of_a_read_only_roster_copies_and_replaces_but_does_not_edit(qapp, tgui):
+    from PySide6.QtWidgets import QApplication
+
+    state, win = tgui
+    s = state.session
+    beta = s.ordered_keys()[2]
+    _view, t = _roster(qapp, win, [beta], beta)
+    m = t.context_menu(("drafter", "model"))
+    for text in ("Pick another model", "Remove teammate drafter", "Add teammate", "Stage the roster",
+                 "Remove own file"):
+        assert not _act(m, text).isEnabled(), text
+    assert _act(m, "Replace roster with the master roster").isEnabled()
+    _act(m, "Copy value").trigger()
+    assert QApplication.clipboard().text() == "test-model-small"
+
+
+def test_the_roster_menu_shows_who_has_what_where_the_checked_rosters_differ(qapp, tgui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLineEdit
+
+    state, win = tgui
+    s = state.session
+    main, alpha = s.ordered_keys()[:2]
+    _view, t = _roster(qapp, win, [main, alpha], main)
+    assert _act(t.context_menu(("drafter", "model")), "Show who has which value").isEnabled()
+    assert not _act(t.context_menu(("drafter", "description")), "Show who has which value").isEnabled()
+    _act(t.context_menu(("drafter", "reasoning_effort")), "Not set").trigger()
+    only = next(a for a in t.context_menu().actions() if a.text().endswith(" only"))
+    assert only.text() == f"Stage the roster for {state.ref_name()} only" and only.isEnabled()
+    assert all(le.contextMenuPolicy() == Qt.NoContextMenu for le in t.findChildren(QLineEdit))
+
+
+def test_right_clicking_a_teammate_cell_opens_the_rosters_menu_for_that_cell(qapp, tgui, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QPoint, QTimer
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication, QLineEdit
+
+    state, win = tgui
+    s = state.session
+    main = s.ordered_keys()[0]
+    _view, t = _roster(qapp, win, [main], main)
+    pump(qapp, lambda: False, 0.2)                   # laid out: right-click finds the cell under the mouse
+    seen = []
+    monkeypatch.setattr(t, "context_menu", lambda at=None, anchor=None: (seen.append(at), SimpleNamespace(
+        exec=lambda *a: None))[1])
+    QTimer.singleShot(2000, lambda: QApplication.activePopupWidget() and QApplication.activePopupWidget().close())
+    desc = next(le for le in t.findChildren(QLineEdit) if le.text() == "Writes first drafts.")
+    qapp.sendEvent(desc, QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(5, 5), desc.mapToGlobal(QPoint(5, 5))))
+    assert seen == [("drafter", "description")]

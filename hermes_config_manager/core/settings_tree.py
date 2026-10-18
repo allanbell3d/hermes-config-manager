@@ -39,6 +39,9 @@ CHAIN_OWNED: set[PathT] = {
 # Keys of an auxiliary task block that its chain table owns.
 TASK_CHAIN_KEYS = frozenset({"provider", "model", "default", "reasoning_effort", "fallback_chain"})
 CHAIN_OF_SECTION = {"model": "primary", "delegation": "delegation", "auxiliary": "auxiliary"}
+# Not a config.yaml key: the hermes-teammates plugin's rosters (teammates.yaml next to each config.yaml),
+# edited by their own table (gui.roster_table) on the page the plan gives it.
+TEAMMATES_SECTION = "hermes-teammates"
 MAIN_EFFORT: PathT = ("agent", "reasoning_effort")
 DEFAULT_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
@@ -47,6 +50,7 @@ DEFAULT_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "
 # page of their category.
 PAGE_PLAN: dict[str, list[tuple[str, list[str]]]] = {
     "models": [("Models", ["model", "delegation", "auxiliary"]),
+               ("Teammates", ["hermes-teammates"]),
                ("Advanced", ["moa", "x_search", "image_gen", "vision", "model_overrides"])],
     "providers": [("Providers", ["providers", "custom_providers", "openrouter", "bedrock", "vertex", "nous",
                                  "local_runtime", "model_catalog", "models_dev", "prompt_caching",
@@ -376,11 +380,15 @@ def build_model(payload: dict, schema, present: dict[PathT, Any] | None = None) 
     blank_aux = blank.get("auxiliary") if isinstance(blank.get("auxiliary"), dict) else {}
     no_effort = {k for k, v in blank_aux.items() if isinstance(v, dict) and "reasoning_effort" not in v}
 
+    sections[TEAMMATES_SECTION] = Section(TEAMMATES_SECTION, "hermes-teammates roster", "models", (), [], "roster",
+                                          False)
     categories = []
     for gid, label in tree.groups:
         keys = [f.key for f in tree.in_group(gid) if f.key in sections]
         if gid != "models":
             keys.sort(key=lambda k: order.get(k, 1 << 20))
+        else:
+            keys.append(TEAMMATES_SECTION)
         if keys:
             categories.append((gid, label, keys))
     return SettingsModel(sections, categories, nodes_by_path, tasks, no_effort, efforts)

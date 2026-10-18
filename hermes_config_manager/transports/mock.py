@@ -154,6 +154,16 @@ class MockTransport(Transport):
         self._enter("write", path)
         self.fs.put(path, data)
 
+    def rename(self, source: str, target: str) -> None:
+        self._enter("rename", source)
+        with self.fs.lock:
+            if source not in self.fs.files:
+                raise TransportError("not_found", f"{source}: not found")
+            if target in self.fs.files:
+                raise TransportError("conflict", f"{target} already exists")
+            self.fs.files[target] = self.fs.files.pop(source)
+            self.fs.mtimes[target] = self.fs.mtimes.pop(source, time.time())
+
     def run(self, command: str, timeout: float = 20.0) -> CommandResult:
         self._enter("run", command)
         self.commands.append(command)

@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.1.3 — 2026-10-18
+
+- **Models › Teammates** edits the rosters of the hermes-teammates plugin (`teammates.yaml` next to each
+  `config.yaml`): the main agent's master roster and each profile's own roster file, with the same Edit → Stage →
+  Review → Write config flow and bulk staging as the model chains. The plugin is optional and third-party, not
+  part of Hermes Agent or of this app; without it the page only says that no host uses it.
+- Each agent shows the roster it uses, worked out like the plugin does from `roster_file` and `roster_source`
+  (`own`, `root`, `fallback`) in its `config.yaml`. A profile that uses the main agent's roster, or keeps its
+  roster in `config.yaml` itself, shows it read-only. **Replace roster** gives the checked profiles a copy of the
+  master (or of the shown agent's file) exactly as written, and sets their `roster_file` when it is not set;
+  **Remove own file** sends a profile with `roster_source: fallback` back to the main agent's roster (the file is
+  kept as `teammates.yaml.removed-<time>`).
+- Teammates can be added, removed and renamed; a rename keeps the teammate's place and comments and never
+  overwrites a teammate of the new name. Cells: description, route and model (model picker), reasoning effort,
+  toolsets and instructions (a text box of its own). `max_live_runs` is staged into each checked agent's
+  `config.yaml`.
+- The plugin's own rules are checked per teammate: names (`^[a-z][a-z0-9_-]{0,31}$`, not a YAML boolean), known
+  keys, text and label lengths, toolsets. Teammates the plugin would skip are marked on the page, and Review
+  refuses a write that would make a teammate unusable (one already broken on the host is only a warning).
+- Where the checked agents differ, an amber dot shows who has what ("use this" takes a value); teammates only
+  some of them have are listed too, marked "in k of N".
+- The same right-click menu as the model chains: on a cell, "not set", pick another model, edit instructions,
+  discard the edit, show who has which value, undo a rename, copy the value or the teammate's name, remove or
+  keep the teammate, add one; for the roster, Stage (for the checked agents or the shown one only), Discard,
+  Unstage, Replace roster and Remove own file. Right-clicking a text box of the table opens this menu too.
+- Restarting gateways after the master is written also restarts the profiles that use it (the plugin reads the
+  roster on every call, but a new teammate's name reaches its tools only at a restart).
+- The model entry removed from an auxiliary task also takes its `base_url` and `api_mode` (they belonged to
+  its provider).
+
 ## v0.1.2 — 2026-10-18
 
 - Where the checked agents differ, every "who has what" now names the agents: the amber dot of a chain

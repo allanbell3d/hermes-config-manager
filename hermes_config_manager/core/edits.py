@@ -36,12 +36,21 @@ class OpKind(str, Enum):
     SET = "set"                      # set a field (scalar, list or mapping value)
     REMOVE = "remove"                # delete the key: runtime default applies
     REPLACE_BLOCK = "replace_block"  # explicit whole-block replacement
+    RENAME_KEY = "rename_key"        # rename the mapping key at ``path`` to ``value``, in place
+    REPLACE_FILE = "replace_file"    # the whole file becomes ``text`` (``value`` = its data); creates it if missing
+    DELETE_FILE = "delete_file"      # the file is removed (kept next to itself as a backup)
+
+
+# Kinds the path-wise helpers cannot follow: a draft with one of them is read from its whole view.
+WHOLE_KINDS = (OpKind.RENAME_KEY, OpKind.REPLACE_FILE, OpKind.DELETE_FILE)
 
 
 def op_already_applied(op, current: Any) -> bool:
     """The file already holds what ``op`` would write (the same change was made elsewhere: no conflict)."""
     from .yamlpatch import strict_equal
 
+    if op.kind in WHOLE_KINDS:
+        return False
     if op.kind is OpKind.REMOVE:
         return current is MISSING
     return current is not MISSING and strict_equal(current, op.value)
@@ -55,6 +64,7 @@ class EditOp:
     # Where the edit came from: field | clear | revert | preset:<name> | yaml |
     # copy:<agent-key> | block.  Shown in the review so bulk edits are traceable.
     origin: str = "field"
+    text: str | None = None          # REPLACE_FILE: the new file's exact text
 
     def describe(self) -> str:
         where = format_path(self.path) or "<document>"
@@ -62,6 +72,12 @@ class EditOp:
             return f"remove {where} (use default)"
         if self.kind is OpKind.REPLACE_BLOCK:
             return f"replace block {where}"
+        if self.kind is OpKind.RENAME_KEY:
+            return f"rename {where} to {self.value}"
+        if self.kind is OpKind.REPLACE_FILE:
+            return "replace the whole file"
+        if self.kind is OpKind.DELETE_FILE:
+            return "remove the file"
         if self.origin == "clear":
             return f"clear {where}"
         return f"set {where}"
@@ -73,6 +89,14 @@ def apply_ops(base: Any, ops: Iterable[EditOp]) -> Any:
     for op in ops:
         if op.kind is OpKind.REMOVE:
             delete_in(data, op.path)
+        elif op.kind is OpKind.DELETE_FILE:
+            data = {}
+        elif op.kind is OpKind.RENAME_KEY:
+            from .yamlpatch import renamed
+
+            parent = get_in(data, op.path[:-1])
+            if isinstance(parent, dict) and op.path[-1] in parent and op.value not in parent:
+                data = set_in(data, op.path[:-1], renamed(parent, op.path[-1], op.value))
         else:
             data = set_in(data, op.path, deep_copy(op.value))
     return data
@@ -80,6 +104,8 @@ def apply_ops(base: Any, ops: Iterable[EditOp]) -> Any:
 
 def view_get(base: Any, ops: list[EditOp], path: PathT) -> Any:
     """Value at ``path`` in the draft view, without copying the whole document."""
+    if any(op.kind in WHOLE_KINDS for op in ops):
+        return get_in(apply_ops(base, ops), path)
     start = 0
     value: Any = MISSING
     resolved = False
@@ -123,7 +149,14 @@ class AgentDraft:
     conflicts: list = field(default_factory=list)
 
     def add(self, op: EditOp) -> None:
-        self.ops = [o for o in self.ops if not is_same_or_ancestor(op.path, o.path)]
+        if op.kind is OpKind.RENAME_KEY:          # earlier edits under the old name still apply (renamed)
+            self.ops.append(op)
+            return
+        whole = op.kind in (OpKind.REPLACE_FILE, OpKind.DELETE_FILE)
+        # A rename is only undone by reverting it (or by replacing the whole file): a later edit at the old
+        # name is about a new key of that name, made after the rename.
+        self.ops = [o for o in self.ops if not is_same_or_ancestor(op.path, o.path)
+                    or (o.kind is OpKind.RENAME_KEY and not whole)]
         self.conflicts = [c for c in self.conflicts if not (is_same_or_ancestor(op.path, c)
                                                             or is_ancestor(c, op.path))]
         self.ops.append(op)
@@ -134,8 +167,8 @@ class AgentDraft:
         if not self.ops:
             return
         op = self.ops[-1]
-        if any(is_ancestor(o.path, op.path) for o in self.ops[:-1]):
-            return
+        if op.kind in WHOLE_KINDS or any(is_ancestor(o.path, op.path) for o in self.ops[:-1]):
+            return             # a whole-file op is compared by text when the file is written
         base_value = get_in(self.base, op.path)
         if op.kind is OpKind.REMOVE:
             same = base_value is MISSING
@@ -236,7 +269,7 @@ class DraftStore:
         if draft is None:
             draft = AgentDraft(key, base, base_sha)
             self._drafts[key] = draft
-        elif not draft.ops and base_sha and draft.base_sha != base_sha:
+        elif not draft.ops and draft.base_sha != base_sha:      # "" = the file is gone (a roster file)
             # Nothing pending: new edits are authored against the file as it is now
             # (e.g. after this app wrote it), never against an older base.
             draft.base, draft.base_sha, draft.base_changed = base, base_sha, False
@@ -281,6 +314,7 @@ class DraftStore:
             k
             for k, before in snap.items()
             if (before[0] if before else []) != (self._drafts[k].ops if k in self._drafts else [])
+            or (before[2] if before else []) != (self._drafts[k].conflicts if k in self._drafts else [])
         }
         if changed:
             self._undo.append({k: snap[k] for k in changed})

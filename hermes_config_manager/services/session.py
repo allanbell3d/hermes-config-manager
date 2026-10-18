@@ -32,6 +32,7 @@ from ..transports import transport_for
 from ..transports.base import Revision, Transport, TransportError, discover_config_paths
 from ..transports.hosts import ACCESS_SSH, HostConfig, load_registry
 from . import cache as cache_mod
+from . import roster as roster_mod
 from .tasks import TaskRunner
 
 
@@ -109,6 +110,7 @@ class Session(QObject):
     drafts_changed = Signal(object)          # set of agent keys
     activity = Signal(str)                   # short status-bar text
     refresh_finished = Signal()
+    rosters_loaded = Signal()                # hermes-teammates roster files (re)read
 
     def __init__(self, hosts: list[HostConfig] | None = None, transports: dict[str, Transport] | None = None,
                  use_cache: bool = True, parent: QObject | None = None) -> None:
@@ -140,6 +142,11 @@ class Session(QObject):
         self._save_timer.setInterval(1500)
         self._save_timer.timeout.connect(self.save_cache)
         self.external_conflicts: dict[str, list] = {}
+        # hermes-teammates roster files: documents keyed "<agent key>#teammates" (see services.roster)
+        self.docs: dict[str, AgentRecord] = {}
+        self.roster_paths: dict[str, str] = {}           # agent key -> where its roster file is (or would be)
+        self._roster_pending: set[str] = set()           # hosts whose roster files are being read
+        self.reasoning_levels: list[str] | None = None   # Hermes' levels, offered for a teammate's reasoning
         for host in self.hosts:
             if host.access_mode == ACCESS_SSH:
                 self.runner.set_host_limit(host.name, 1)
@@ -175,6 +182,10 @@ class Session(QObject):
         for key in dropped:
             self.agents.pop(key)
             self.checked.discard(key)
+            self.roster_paths.pop(key, None)
+        for key in [k for k, r in self.docs.items() if r.host not in names]:
+            self.docs.pop(key)
+            dropped.append(key)
         if any(self.drafts.has_changes(k) for k in dropped):
             self.drafts.discard(dropped)        # staged changes of a host that is gone can never be written
         if self.viewed and self.viewed not in self.agents:
@@ -194,7 +205,15 @@ class Session(QObject):
 
     # ----------------------------------------------------------------- agents
     def record(self, key: str) -> AgentRecord | None:
-        return self.agents.get(key)
+        """An agent's config, or a roster file (``<agent key>#teammates``).  A roster file that does not exist
+        (yet) is a stand-in with status MISSING and the path it would have; ``docs`` holds the real ones."""
+        rec = self.agents.get(key) or self.docs.get(key)
+        if rec is None and roster_mod.is_doc(key):
+            agent = self.agents.get(roster_mod.agent_of(key))
+            if agent is not None:
+                rec = roster_mod.RosterRecord(agent.host, agent.profile, self.roster_paths.get(agent.key, ""),
+                                              status=Status.MISSING)
+        return rec
 
     def ordered_keys(self) -> list[str]:
         return list(self.agents.keys())
@@ -206,8 +225,14 @@ class Session(QObject):
         self.agents = OrderedDict(items)
 
     def base_of(self, key: str) -> tuple[Any, str]:
-        rec = self.agents[key]
+        rec = self.agents.get(key) or self.docs.get(key)
+        if rec is None:
+            return {}, ""             # a roster file that does not exist yet
         return rec.data, (rec.revision.sha256 if rec.revision else "")
+
+    def has_staged(self, agent: str) -> bool:
+        """The agent's config.yaml or its roster file has staged changes."""
+        return self.drafts.has_changes(agent) or self.drafts.has_changes(roster_mod.doc_key(agent))
 
     # ---------------------------------------------------------- view/checked
     def set_viewed(self, key: str) -> None:
@@ -357,12 +382,99 @@ class Session(QObject):
         status.agent_count = len(found)
         for profile, path in found:
             self.refresh_agent(agent_key(name, profile), _from_scan=True)
+        self.refresh_rosters(name)
         if not found:
             status.state, status.last_ok = HostState.OK, time.time()
         self.host_status_changed.emit(name)
         self._maybe_finished()
 
+    # ---------------------------------------------------------- roster files
+    def roster_path_of(self, rec: AgentRecord) -> str:
+        """Where an agent's roster file is, by the roster_file of its config as loaded from the host."""
+        host = self.host(rec.host)
+        t = self.transport(rec.host)
+        home = roster_mod.home_of(t, host.hermes_root if host else "", rec.profile, rec.path)
+        return roster_mod.roster_path(t, home, roster_mod.settings(rec.data))
+
+    def refresh_rosters(self, name: str) -> None:
+        """Read the hermes-teammates roster files of every agent of host ``name`` (one background task)."""
+        host = self.host(name)
+        if host is None or not host.enabled:
+            return
+        agents = [(k, self.roster_path_of(r)) for k, r in self.agents.items()
+                  if r.host == name and r.status != Status.MISSING]
+        self._roster_pending.add(name)
+        self.runner.submit(
+            roster_mod.scan_rosters, self.transport(name), agents, _read_and_parse,
+            label=f"Read teammates rosters on {name}", key=("roster", name), host=name,
+            timeout=host.timeout * 3,
+            on_done=lambda found, n=name: self._on_rosters(n, found),
+            on_error=lambda exc, n=name: self._rosters_done(n),
+        )
+
+    def _rosters_done(self, name: str) -> None:
+        self._roster_pending.discard(name)
+        self.rosters_loaded.emit()
+        self._maybe_finished()
+
+    def _check_roster_path(self, key: str) -> None:
+        """An agent's config was (re)loaded: when its roster_file moved, read its host's rosters again."""
+        rec = self.agents.get(key)
+        if rec is None or rec.host in self._roster_pending or key not in self.roster_paths:
+            return
+        if self.roster_path_of(rec) != self.roster_paths[key]:
+            self.refresh_rosters(rec.host)
+
+    def _on_rosters(self, name: str, found: dict) -> None:
+        moved = False
+        for agent, f in found.items():
+            rec = self.agents.get(agent)
+            if rec is None:
+                continue
+            old_path = self.roster_paths.get(agent)
+            self.roster_paths[agent] = f.path
+            moved |= self.roster_path_of(rec) != f.path      # its config changed while the files were read
+            key = roster_mod.doc_key(agent)
+            if old_path is not None and old_path != f.path and key in self.docs and \
+                    not getattr(self.drafts.draft(key), "ops", None):
+                self.docs.pop(key)                            # another file now: the old one is not its roster
+            doc = self.docs.get(key)
+            out = f.outcome
+            if out is None:
+                if doc is not None and not getattr(self.drafts.draft(key), "ops", None):
+                    self.docs.pop(key)
+                elif doc is not None:
+                    doc.status, doc.error = Status.MISSING, "No longer found on the host"
+                continue
+            appeared = doc is None
+            if doc is None:
+                doc = self.docs[key] = roster_mod.RosterRecord(rec.host, rec.profile, f.path)
+            old_sha = doc.revision.sha256 if doc.revision else None
+            if appeared and getattr(self.drafts.draft(key), "ops", None):
+                old_sha = ""        # staged while the file did not exist: the draft adopts it (as a conflict)
+            doc.path, doc.raw, doc.revision = f.path, out.raw, out.revision
+            doc.status, doc.error, doc.parse_line = out.status, out.error, out.parse_line
+            doc.data = out.data if out.status == Status.LOADED else None
+            doc.loaded_at, doc.from_cache = time.time(), False
+            if out.status == Status.LOADED and old_sha is not None and old_sha != out.revision.sha256:
+                conflicts = self.drafts.rebase(key, doc.data, out.revision.sha256)
+                if conflicts:
+                    self.external_conflicts[key] = conflicts
+        self._rosters_done(name)
+        if moved:
+            self.refresh_rosters(name)
+
+    def adopt_removed(self, key: str) -> None:
+        """A roster file was removed by this app: with fallback the agent uses the main agent's roster."""
+        self.docs.pop(key, None)
+        self.rosters_loaded.emit()
+
     def refresh_agent(self, key: str, _from_scan: bool = False) -> None:
+        if roster_mod.is_doc(key):
+            rec = self.agents.get(roster_mod.agent_of(key))
+            if rec is not None:
+                self.refresh_rosters(rec.host)
+            return
         rec = self.agents.get(key)
         host = self.host(rec.host) if rec else None
         if rec is None or host is None or rec.status == Status.MISSING:
@@ -416,6 +528,7 @@ class Session(QObject):
         else:
             rec.status = Status.LOADED
         self.agent_updated.emit(key)
+        self._check_roster_path(key)
         self._finish_load(key)
         self._save_timer.start()
 
@@ -432,7 +545,7 @@ class Session(QObject):
         self._finish_load(key)
 
     def _maybe_finished(self) -> None:
-        if not self._pending_loads and not any(s.state == HostState.CONNECTING for s in self.host_status.values()):
+        if not self.is_refreshing():
             self.refresh_finished.emit()
 
     def _emit_activity(self) -> None:
@@ -449,10 +562,12 @@ class Session(QObject):
             self.activity.emit("")
 
     def is_refreshing(self) -> bool:
-        return bool(self._pending_loads) or any(s.state == HostState.CONNECTING for s in self.host_status.values())
+        return bool(self._pending_loads) or bool(self._roster_pending) or \
+            any(s.state == HostState.CONNECTING for s in self.host_status.values())
 
     def cancel_refresh(self) -> None:
-        self.runner.cancel_where(lambda t: isinstance(t.key, tuple) and t.key[0] in ("scan", "load"))
+        self.runner.cancel_where(lambda t: isinstance(t.key, tuple) and t.key[0] in ("scan", "load", "roster"))
+        self._roster_pending.clear()
         for key in list(self._pending_loads):
             rec = self.agents.get(key)
             if rec:
@@ -476,12 +591,22 @@ class Session(QObject):
 
     def adopt_written(self, key: str, raw: bytes, revision: Revision, data: Any) -> None:
         """Record the new file state after a successful apply (from readback)."""
-        rec = self.agents.get(key)
-        if rec is None:
-            return
+        if roster_mod.is_doc(key):
+            rec = self.docs.get(key) or self.record(key)          # a stand-in: a file this app just created
+            if rec is None:
+                return
+            self.docs[key] = rec
+        else:
+            rec = self.agents.get(key)
+            if rec is None:
+                return
         rec.raw, rec.revision, rec.data = raw, revision, data
         rec.status, rec.loaded_at, rec.from_cache, rec.error = Status.LOADED, time.time(), False, None
+        if roster_mod.is_doc(key):
+            self.rosters_loaded.emit()
+            return
         self.agent_updated.emit(key)
+        self._check_roster_path(key)
         self._save_timer.start()
 
     def shutdown(self) -> None:

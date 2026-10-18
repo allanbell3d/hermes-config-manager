@@ -24,13 +24,13 @@ from typing import Any
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
-from .paths import MISSING, PathT
+from .paths import MISSING, PathT, deep_copy, get_in, set_in
 
 _Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 __all__ = [
     "MISSING", "PatchError", "PatchResult", "YamlParseError", "diff_paths", "fast_load",
-    "render_patched", "strict_equal",
+    "rename_key", "renamed", "render_patched", "strict_equal",
 ]
 
 
@@ -393,6 +393,51 @@ class _Patcher:
         for start, end, new in sorted(self.edits, key=lambda e: (e[0], e[1]), reverse=True):
             out = out[:start] + new + out[end:]
         return out
+
+
+def renamed(mapping: dict, old: Any, new: Any) -> dict:
+    """A copy of ``mapping`` with key ``old`` renamed to ``new`` at the same position."""
+    return {(new if k == old else k): v for k, v in mapping.items()}
+
+
+def rename_key(text: str, path: PathT, new: str) -> str:
+    """Rename the mapping key at ``path`` in place: only the key's characters change, so its position, its
+    value and every comment stay.  Verified by parsing the result."""
+    if text.startswith("﻿"):
+        return "﻿" + rename_key(text[1:], path, new)
+    if not path:
+        raise PatchError("nothing to rename")
+    data = fast_load(text)
+    parent_path, old = tuple(path[:-1]), path[-1]
+    parent = data
+    for key in parent_path:
+        parent = parent.get(key) if isinstance(parent, dict) else None
+    if not isinstance(parent, dict) or old not in parent:
+        raise PatchError(f"'{old}' is not in the file")
+    if new in parent:
+        raise PatchError(f"'{new}' already exists")
+    node = yaml.compose(text, Loader=_Loader)
+    key_node = None
+    for key in path:
+        if not isinstance(node, MappingNode) or node.flow_style:
+            raise PatchError("only block mappings can be renamed in place")
+        for k, v in node.value:
+            if isinstance(k, ScalarNode) and fast_load(text[k.start_mark.index:k.end_mark.index]) == key:
+                key_node, node = k, v
+                break
+        else:
+            raise PatchError(f"'{key}' not found in the text")
+    out = text[:key_node.start_mark.index] + _scalar_text(new, key_node) + text[key_node.end_mark.index:]
+    try:
+        check = fast_load(out)
+    except YamlParseError as exc:
+        raise PatchError(f"renamed text does not parse: {exc}") from None
+    want = renamed(parent, old, new)
+    expected = set_in(deep_copy(data), parent_path, want)
+    got = get_in(check, parent_path)
+    if not strict_equal(check, expected) or not isinstance(got, dict) or list(got) != list(want):
+        raise PatchError("renamed text does not read back as intended")
+    return out
 
 
 def _full_rewrite(target: Any, original: str) -> str:

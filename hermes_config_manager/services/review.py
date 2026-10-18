@@ -19,9 +19,11 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from ..core import roster_rules
 from ..core.paths import PathT, format_path
 from . import apply as A
 from . import gateway
+from . import roster as roster_mod
 
 
 @dataclass
@@ -51,8 +53,31 @@ def snapshot(session, key: str) -> A.DraftSnapshot | None:
     rec, draft = session.record(key), session.drafts.draft(key)
     if rec is None or draft is None or not draft.ops:
         return None
+    validate = roster_rules.review if roster_mod.is_doc(key) else None   # the plugin's own rules
+    master = roster_mod.is_doc(key) and rec.is_main                    # the master: edited, never replaced/removed
     return A.DraftSnapshot(key, rec.host, rec.display, rec.path, draft.base, draft.base_sha, list(draft.ops),
-                            list(draft.conflicts))
+                            list(draft.conflicts), validate, whole_file_allowed=not master)
+
+
+def restart_targets(session, keys: list[str]) -> list[str]:
+    """The agents whose gateways need a restart after writing ``keys`` (configs and roster files), once each.
+
+    The plugin reads a roster on every call, but the teammate names in its tool description are fixed when a
+    gateway starts: after the master changes, every profile of that host that uses it needs a restart too.
+    """
+    from .roster_edit import users_of_master
+
+    out: dict[str, None] = {}
+    for key in keys:
+        agent = roster_mod.agent_of(key)
+        rec = session.agents.get(agent)
+        if rec is None:
+            continue
+        out.setdefault(agent, None)
+        if roster_mod.is_doc(key) and rec.is_main:
+            for k in users_of_master(session, rec.host):
+                out.setdefault(k, None)
+    return list(out)
 
 
 class ApplyFlow(QObject):
@@ -137,7 +162,10 @@ class ApplyFlow(QObject):
         self.applied.emit(result)
 
     def _on_applied(self, result: A.ApplyResult) -> None:
-        if result.status == A.WRITTEN and result.revision is not None:
+        if result.status == A.WRITTEN and result.removed:
+            self.session.adopt_removed(result.key)
+            self.session.drafts.adopt_applied(result.key, {}, "")
+        elif result.status == A.WRITTEN and result.revision is not None:
             self.session.adopt_written(result.key, result.raw, result.revision, result.data)
             self.session.drafts.adopt_applied(result.key, result.data, result.revision.sha256)
         self._record(result)
@@ -156,7 +184,7 @@ class ApplyFlow(QObject):
         """Restart the gateway of each agent (hosts without a command endpoint are reported)."""
         outcomes: list[gateway.RestartResult] = []
         pending = set()
-        for key in keys:
+        for key in restart_targets(self.session, keys):
             rec = self.session.record(key)
             host = self.session.host(rec.host) if rec else None
             if rec is None or host is None:

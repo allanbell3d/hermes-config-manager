@@ -197,9 +197,31 @@ def reconcile(layout: Layout, model: SettingsModel) -> Layout:
     for key in missing:
         cid = model.default_category(key)
         cat = next((c for c in layout.cats if c.id == cid), None) or layout.cats[-1]
-        page = next((p for p in cat.pages if p.label == "Other"), None)
+        page = _planned_page(cat, cid, key)
+        if page is None:
+            page = next((p for p in cat.pages if p.label == "Other"), None)
         if page is None:
             page = Page(f"{cat.id}/Other", "Other", [])
             cat.pages.append(page)
         page.sections.append(key)
     return layout
+
+
+def _planned_page(cat: Category, cid: str | None, key: str) -> Page | None:
+    """The page :data:`PAGE_PLAN` gives a section that is new to a saved layout, created at its planned place
+    when the layout does not have it yet (a planned page of its own, e.g. Models › Teammates)."""
+    plan = PAGE_PLAN.get(cid or "", [])
+    for i, (label, keys) in enumerate(plan):
+        if key not in keys:
+            continue
+        page = next((p for p in cat.pages if p.label == label), None)
+        if page is None:
+            page = Page(f"{cid}/{label}", label, [])
+            pos = 0
+            for before, _keys in plan[:i]:
+                j = next((n for n, p in enumerate(cat.pages) if p.label == before), None)
+                if j is not None:
+                    pos = j + 1
+            cat.pages.insert(pos, page)
+        return page
+    return None

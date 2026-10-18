@@ -63,6 +63,10 @@ class DiffCounter(QObject):
         if sec.chain in ("primary", "delegation"):
             spec = C.PRIMARY if sec.chain == "primary" else C.DELEGATION
             n += int(len(C.variants(scope, spec, keys)) > 1)
+        elif sec.chain == "roster":
+            from ..services.roster_edit import differ_count
+
+            n += differ_count(st.session, keys)
         elif sec.chain == "auxiliary":
             for task in st.model.tasks:
                 if st.task_hidden(task):

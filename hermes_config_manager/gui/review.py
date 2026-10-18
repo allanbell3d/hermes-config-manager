@@ -17,12 +17,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
                                QPlainTextEdit, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
+from ..core.edits import OpKind
 from ..core.paths import MISSING, PathT, get_in, is_same_or_ancestor
 from ..core.yamlpatch import diff_paths
 from ..services import apply as A
 from ..services import chains as C
 from ..services.editing import canonical
 from ..services.review import ApplyFlow
+from ..services.roster import FILE as ROSTER_FILE, is_doc
 from ..services.work import rows_of, spec_for
 from ..core import secrets
 from .editors import shown
@@ -55,6 +57,50 @@ class Group:
     chain: str | None = None
     part: str = ""
     items: list[Item] = field(default_factory=list)
+    whole: bool = False       # a whole-file change (roster file replaced or removed): show the file diff
+    also: list = field(default_factory=list)        # paths unstaged with it (a rename's moved default, ...)
+
+
+ROSTER_CRUMB = "teammates roster"
+
+
+def _roster_groups(groups: dict, session, key: str, draft) -> None:
+    """The staged changes of one roster file: whole-file replace/remove, renames, then changed values."""
+    base, after = draft.base, draft.view()
+    head = [ROSTER_CRUMB]
+    whole = next((op for op in reversed(draft.ops) if op.kind in (OpKind.REPLACE_FILE, OpKind.DELETE_FILE)), None)
+    if whole is not None:
+        if whole.kind is OpKind.DELETE_FILE:
+            text = "own roster file removed: the agent uses the main agent's roster (roster_source fallback)"
+        else:
+            src = whole.origin.split(":", 1)[1] if ":" in whole.origin else ""
+            rec = session.record(src) if src and src != "master" else None
+            source = "the master roster" if src == "master" else f"{rec.name}'s roster" if rec else "another roster"
+            text = ("own roster created as a copy of " if key not in session.docs else "roster replaced with ") + source
+        gk = f"w|{text}"
+        g = groups.setdefault(gk, Group(gk, "f", head + ["whole roster"], text, path=(), whole=True))
+        g.items.append(Item(key, base, after))
+        return
+    covered: list[PathT] = []
+    for op in draft.ops:
+        if op.kind is OpKind.RENAME_KEY:
+            gk = f"r|{json.dumps([str(p) for p in op.path])}|{op.value}"
+            new_path = op.path[:-1] + (op.value,)
+            also = [new_path]
+            g = groups.setdefault(gk, Group(gk, "f", head + [str(p) for p in op.path], f"renamed to {op.value}",
+                                            path=op.path, whole=True, also=also))
+            g.items.append(Item(key, op.path[-1], op.value))
+            covered += [op.path, new_path]
+    for path in diff_paths(base, after):
+        if any(is_same_or_ancestor(c, path) for c in covered):
+            continue
+        nv = get_in(after, path)
+        gk = f"rf|{json.dumps([str(p) for p in path])}|{json.dumps(canonical(nv), default=str)}"
+        g = groups.get(gk)
+        if g is None:
+            g = groups[gk] = Group(gk, "f", head + [str(p) for p in path],
+                                   "key removed" if nv is MISSING else shown(nv, path), path=path)
+        g.items.append(Item(key, get_in(base, path), nv))
 
 
 def chain_paths(spec: C.ChainSpec) -> list[PathT]:
@@ -89,6 +135,9 @@ def build_groups(state) -> list[Group]:
     for key in session.drafts.keys_with_changes():
         draft = session.drafts.draft(key)
         if draft is None or not draft.ops:
+            continue
+        if is_doc(key):
+            _roster_groups(groups, session, key, draft)
             continue
         base, after = draft.base, draft.view()
         covered: list[PathT] = []
@@ -453,7 +502,7 @@ class ReviewDialog(QDialog):
         st = self.state
         item = next((i for i in g.items if i.key == key), g.items[0])
         rec = st.session.record(item.key)
-        if g.gkey in self.whole_file:
+        if g.gkey in self.whole_file or g.whole:
             p = self.checked.get(item.key)
             if p is None:
                 text = "Checking the file on the host…" if self.checking else "Not checked."
@@ -464,7 +513,7 @@ class ReviewDialog(QDialog):
             view.setPlainText(secrets.mask_text(text))
             return
         lines = [f"<span style='color:{T['faint']}'># {rec.name if rec else key} on "
-                 f"{rec.host if rec else ''} · config.yaml</span>"]
+                 f"{rec.host if rec else ''} · {ROSTER_FILE if is_doc(item.key) else 'config.yaml'}</span>"]
         for tag, text in diff_text(st, g, item):
             esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(" ", "&nbsp;")
             bg = T["add"] if tag == "+" else T["del"] if tag == "-" else None
@@ -489,7 +538,8 @@ class ReviewDialog(QDialog):
     def _unstage_one(self, g: Group, key: str) -> None:
         drafts = self.state.session.drafts
         if g.kind == "f":
-            drafts.revert([key], g.path)
+            for p in [g.path] + g.also:
+                drafts.revert([key], p)
         else:
             for p in chain_paths(spec_for(g.chain)):
                 drafts.revert([key], p)
@@ -540,7 +590,8 @@ class ReviewDialog(QDialog):
         drafts = self.state.session.drafts
         keys = [i.key for i in g.items]
         if g.kind == "f":
-            drafts.revert(keys, g.path)
+            for p in [g.path] + g.also:
+                drafts.revert(keys, p)
         else:
             for p in chain_paths(spec_for(g.chain)):
                 drafts.revert(keys, p)

@@ -134,6 +134,10 @@ class Transport:
         """Atomically replace (or create) ``path`` with ``data``."""
         raise NotImplementedError
 
+    def rename(self, source: str, target: str) -> None:
+        """Rename ``source`` to ``target``; refuses (``conflict``) when ``target`` exists."""
+        raise NotImplementedError
+
     # --- commands ---------------------------------------------------------
     def run(self, command: str, timeout: float = 20.0) -> CommandResult:
         raise TransportError("unsupported", f"Commands are not available for host '{self.host.name}'.")

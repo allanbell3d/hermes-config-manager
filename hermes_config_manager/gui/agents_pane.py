@@ -60,7 +60,7 @@ class AgentRow(Clickable):
         self.box.blockSignals(True)
         self.box.setChecked(self.key in self.state.session.checked)
         self.box.blockSignals(False)
-        self._staged = self.state.session.drafts.has_changes(self.key)
+        self._staged = self.state.session.has_staged(self.key)
         if show_models:
             p, m, e = self.state.head_of(self.key) if rec.usable else (None, None, None)
             text = (m.rsplit("/", 1)[-1] + (f" · {e}" if e else "")) if m else (
@@ -358,7 +358,7 @@ class AgentsPane(QWidget):
                 box.models_shown = self.show_models
                 for row in box.rows.values():
                     row.refresh(self.show_models)
-            box.refresh_head(any(s.drafts.has_changes(k) for k in box.rows))
+            box.refresh_head(any(s.has_staged(k) for k in box.rows))
             shown_any = shown_any or not box.isHidden()
         if not s.hosts:
             self.empty.setText("No hosts yet. Use Hosts… to add the folder, share or SSH server where your "
@@ -423,10 +423,12 @@ class AgentsPane(QWidget):
                     row.box.blockSignals(True)
                     row.box.setChecked(row.key in self.state.session.checked)
                     row.box.blockSignals(False)
-            box.refresh_head(any(self.state.session.drafts.has_changes(k) for k in box.rows))
+            box.refresh_head(any(self.state.session.has_staged(k) for k in box.rows))
 
     def refresh_rows(self, keys) -> None:
-        self._dirty_rows |= set(keys)
+        from ..services.roster import agent_of
+
+        self._dirty_rows |= {agent_of(k) for k in keys}          # a roster file's changes mark its agent
         self._upd.start()
 
     def _agent_updated(self, key: str) -> None:
@@ -443,7 +445,7 @@ class AgentsPane(QWidget):
                     if not box.body.isHidden():
                         row.refresh(self.show_models)
             if touched:
-                box.refresh_head(any(self.state.session.drafts.has_changes(k) for k in box.rows))
+                box.refresh_head(any(self.state.session.has_staged(k) for k in box.rows))
 
     def _focus_changed(self, key: str) -> None:
         for box in self.boxes.values():
@@ -453,4 +455,4 @@ class AgentsPane(QWidget):
     def _host_status(self, name: str) -> None:
         box = self.boxes.get(name)
         if box:
-            box.refresh_head(any(self.state.session.drafts.has_changes(k) for k in box.rows))
+            box.refresh_head(any(self.state.session.has_staged(k) for k in box.rows))

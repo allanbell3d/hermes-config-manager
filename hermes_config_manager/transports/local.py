@@ -86,6 +86,14 @@ class LocalTransport(Transport):
         except OSError as exc:
             raise classify_exception(exc, target) from None
 
+    def rename(self, source: str, target: str) -> None:
+        if os.path.lexists(target):
+            raise TransportError("conflict", f"{target} already exists")
+        try:
+            os.rename(source, target)
+        except OSError as exc:
+            raise classify_exception(exc, source) from None
+
     def replace_bytes(self, path: str, data: bytes) -> None:
         folder = os.path.dirname(path) or "."
         tmp = None
